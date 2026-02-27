@@ -31,7 +31,7 @@ venv/
 ENV/
 env.bak/
 venv.bak/
-
+sub2api/
 # Project Specific
 config.yaml
 config.local.yaml

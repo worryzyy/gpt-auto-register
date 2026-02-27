@@ -215,13 +215,36 @@ def get_accounts():
         try:
             with open(cfg.files.accounts_file, 'r', encoding='utf-8') as f:
                 for line in f:
-                    parts = line.strip().split('|')
-                    if len(parts) >= 2:
+                    row = line.strip()
+                    if not row:
+                        continue
+
+                    # 兼容两种历史格式:
+                    # 1) email|password|status|time
+                    # 2) email----password----time----status
+                    if '----' in row:
+                        parts = [p.strip() for p in row.split('----')]
+                        if len(parts) >= 4:
+                            email, password, time_text, status = parts[:4]
+                        else:
+                            continue
+                    else:
+                        parts = [p.strip() for p in row.split('|')]
+                        if len(parts) >= 4:
+                            email, password, status, time_text = parts[:4]
+                        elif len(parts) >= 2:
+                            email, password = parts[:2]
+                            status = parts[2] if len(parts) > 2 else ""
+                            time_text = parts[3] if len(parts) > 3 else ""
+                        else:
+                            continue
+
+                    if email:
                         accounts.append({
-                            "email": parts[0].strip(),
-                            "password": parts[1].strip(),
-                            "status": parts[2].strip() if len(parts) > 2 else "",
-                            "time": parts[3].strip() if len(parts) > 3 else ""
+                            "email": email,
+                            "password": password,
+                            "status": status,
+                            "time": time_text
                         })
         except Exception as e:
             return jsonify({"error": str(e)}), 500

@@ -10,14 +10,26 @@ document.addEventListener('DOMContentLoaded', () => {
 
 // 切换视图
 function switchTab(tabName) {
-    document.querySelectorAll('.view-section').forEach(el => el.classList.remove('active'));
+    document.querySelectorAll('.view-section').forEach(el => {
+        el.classList.remove('active');
+        el.classList.add('hidden');
+    });
     document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
 
-    document.getElementById(`view-${tabName}`).classList.add('active');
+    const targetView = document.getElementById(`view-${tabName}`);
+    if (targetView) {
+        targetView.classList.add('active');
+        targetView.classList.remove('hidden');
+    }
 
     // 找到对应的 nav item 高亮
     const navIndex = tabName === 'dashboard' ? 0 : 1;
     document.querySelectorAll('.nav-item')[navIndex].classList.add('active');
+
+    const pageTitle = document.querySelector('.page-title');
+    if (pageTitle) {
+        pageTitle.textContent = tabName === 'dashboard' ? '系统概览' : '账号管理';
+    }
 
     if (tabName === 'accounts') {
         loadAccounts();
@@ -47,7 +59,6 @@ function updateUI(data) {
     document.getElementById('valSuccess').textContent = data.success;
     document.getElementById('valFail').textContent = data.fail;
     document.getElementById('valInventory').textContent = data.total_inventory;
-    document.getElementById('lastUpdate').textContent = new Date().toLocaleTimeString();
 
     // 2. 更新运行状态 (按钮和指示灯)
     isRunning = data.is_running;
@@ -59,12 +70,12 @@ function updateUI(data) {
     if (isRunning) {
         btnStart.classList.add('hidden');
         btnStop.classList.remove('hidden');
-        statusDot.classList.add('running');
+        statusDot.classList.add('active');
         statusText.textContent = "运行中";
     } else {
         btnStart.classList.remove('hidden');
         btnStop.classList.add('hidden');
-        statusDot.classList.remove('running');
+        statusDot.classList.remove('active');
         statusText.textContent = "系统空闲";
     }
 

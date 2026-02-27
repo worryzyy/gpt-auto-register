@@ -30,9 +30,7 @@ from browser import (
     create_driver,
     fill_signup_form,
     enter_verification_code,
-    fill_profile_info,
-    subscribe_plus_trial,
-    cancel_subscription
+    fill_profile_info
 )
 
 
@@ -122,38 +120,7 @@ def register_one_account(monitor_callback=None):
         print("⏳ 等待页面稳定...")
         time.sleep(5)
         _report("registered")
-        
-        # 11. 开通 Plus 试用
-        print("\n" + "-" * 30)
-        print("🚀 开始开通 Plus 试用")
-        print("-" * 30)
-        
-        if subscribe_plus_trial(driver):
-            print("🎉 Plus 试用开通成功！")
-            update_account_status(email, "已开通Plus")
-            _report("plus_subscribed")
-            
-            # 12. 取消订阅 (防止扣费)
-            print("\n" + "-" * 30)
-            print("🛑 正在取消订阅...")
-            print("-" * 30)
-            
-            time.sleep(5)
-            if cancel_subscription(driver):
-                print("🎉 订阅已成功取消，流程完美结束！")
-                update_account_status(email, "已取消订阅")
-                _report("subscription_cancelled")
-            else:
-                print("⚠️ 订阅取消失败，请务必手动取消！")
-                update_account_status(email, "取消订阅失败")
-                _report("cancel_failed")
-        else:
-            print("⚠️ Plus 试用开通失败")
-            update_account_status(email, "Plus开通失败")
-            _report("plus_failed")
-            
-        success = True
-        time.sleep(5)
+        print("✅ 注册完成，已跳过绑卡与取消订阅流程")
         
     except InterruptedError:
         print("🛑 任务已被用户强制中断")
