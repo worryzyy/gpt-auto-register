@@ -4,6 +4,9 @@
 """
 
 import time
+import os
+import re
+import subprocess
 import undetected_chromedriver as uc
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
@@ -16,7 +19,8 @@ from config import (
     SHORT_WAIT_TIME,
     ERROR_PAGE_MAX_RETRIES,
     BUTTON_CLICK_MAX_RETRIES,
-    CREDIT_CARD_INFO
+    CREDIT_CARD_INFO,
+    CHROME_PATH
 )
 from utils import generate_user_info, generate_billing_info
 
@@ -40,6 +44,44 @@ class SafeChrome(uc.Chrome):
             pass
         except Exception:
             pass
+
+
+def detect_chrome_major_version(chrome_path):
+    """
+    检测 Chrome 主版本号（如 144）
+    """
+    try:
+        result = subprocess.run(
+            [chrome_path, "--version"],
+            capture_output=True,
+            timeout=8
+        )
+        output = (result.stdout or b"") + (result.stderr or b"")
+        version_text = output.decode("utf-8", errors="ignore").strip()
+        if not version_text:
+            version_text = output.decode("gbk", errors="ignore").strip()
+        match = re.search(r"(\d+)\.\d+\.\d+\.\d+", version_text)
+        if match:
+            return int(match.group(1))
+
+        if os.name == "nt":
+            escaped_path = chrome_path.replace("'", "''")
+            ps_cmd = f"(Get-Item '{escaped_path}').VersionInfo.ProductVersion"
+            ps_result = subprocess.run(
+                ["powershell", "-NoProfile", "-Command", ps_cmd],
+                capture_output=True,
+                timeout=8
+            )
+            ps_output = (ps_result.stdout or b"") + (ps_result.stderr or b"")
+            ps_text = ps_output.decode("utf-8", errors="ignore").strip()
+            if not ps_text:
+                ps_text = ps_output.decode("gbk", errors="ignore").strip()
+            ps_match = re.search(r"(\d+)\.\d+\.\d+\.\d+", ps_text)
+            if ps_match:
+                return int(ps_match.group(1))
+    except Exception:
+        return None
+    return None
 
 
 def create_driver(headless=False):
@@ -73,8 +115,32 @@ def create_driver(headless=False):
         options.add_argument("--lang=zh-CN,zh;q=0.9,en;q=0.8")
     
     # 使用自定义的 SafeChrome (注意: 传入 real_headless=False)
-    driver = SafeChrome(options=options, use_subprocess=True, headless=real_headless)
-    
+    # 如果配置了 Chrome 路径，则使用指定路径
+    if CHROME_PATH:
+        print(f"  📂 使用指定的 Chrome 路径: {CHROME_PATH}")
+        version_main = detect_chrome_major_version(CHROME_PATH)
+        if version_main:
+            print(f"  🔢 检测到 Chrome 主版本: {version_main}")
+        else:
+            print("  ⚠️ 无法检测 Chrome 版本，将由 undetected-chromedriver 自动匹配")
+
+        chrome_kwargs = {
+            "options": options,
+            "use_subprocess": True,
+            "headless": real_headless,
+            "browser_executable_path": CHROME_PATH,
+        }
+        if version_main:
+            chrome_kwargs["version_main"] = version_main
+
+        driver = SafeChrome(**chrome_kwargs)
+    else:
+        driver = SafeChrome(
+            options=options,
+            use_subprocess=True,
+            headless=real_headless
+        )
+
     # === 深度伪装 (针对 Headless 模式) ===
     if headless:
         print("🎭 应用深度指纹伪装...")

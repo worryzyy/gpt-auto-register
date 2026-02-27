@@ -57,6 +57,7 @@ class BrowserConfig:
     max_wait_time: int = 600
     short_wait_time: int = 120
     user_agent: str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+    chrome_path: str = ""  # Chrome 浏览器路径
 
 
 @dataclass
@@ -219,7 +220,8 @@ class ConfigLoader:
             self.config.browser = BrowserConfig(
                 max_wait_time=browser.get('max_wait_time', 600),
                 short_wait_time=browser.get('short_wait_time', 120),
-                user_agent=browser.get('user_agent', '')
+                user_agent=browser.get('user_agent', ''),
+                chrome_path=browser.get('chrome_path', '')
             )
         
         # 密码配置
@@ -327,6 +329,7 @@ EMAIL_ADMIN_PASSWORD = cfg.email.admin_password
 MAX_WAIT_TIME = cfg.browser.max_wait_time
 SHORT_WAIT_TIME = cfg.browser.short_wait_time
 USER_AGENT = cfg.browser.user_agent
+CHROME_PATH = cfg.browser.chrome_path
 
 # 密码配置
 PASSWORD_LENGTH = cfg.password.length
