@@ -16,11 +16,15 @@ ChatGPT 账号自动注册脚本
     - 批量注册支持
 """
 
-import time
+import argparse
+import queue
 import random
+import threading
+import time
 
 from config import (
     TOTAL_ACCOUNTS,
+    BATCH_WORKER_COUNT,
     BATCH_INTERVAL_MIN,
     BATCH_INTERVAL_MAX,
     cfg
@@ -257,12 +261,78 @@ def register_one_account(monitor_callback=None):
 
 
 
-def run_batch():
+def parse_args():
+    """解析命令行参数"""
+    parser = argparse.ArgumentParser(description="ChatGPT 账号批量注册工具")
+    parser.add_argument(
+        "-n",
+        "--count",
+        type=int,
+        default=None,
+        help=f"本次注册账号数量（默认: config.yaml 的 registration.total_accounts={TOTAL_ACCOUNTS}）",
+    )
+    parser.add_argument(
+        "-w",
+        "--worker-count",
+        "--workers",
+        dest="worker_count",
+        type=int,
+        default=None,
+        help=f"并发数（默认: config.yaml 的 batch.worker_count={BATCH_WORKER_COUNT}）",
+    )
+    parser.add_argument(
+        "--interval-min",
+        type=int,
+        default=None,
+        help=f"任务间隔最小秒数（默认: {BATCH_INTERVAL_MIN}）",
+    )
+    parser.add_argument(
+        "--interval-max",
+        type=int,
+        default=None,
+        help=f"任务间隔最大秒数（默认: {BATCH_INTERVAL_MAX}）",
+    )
+    return parser.parse_args()
+
+
+def _normalize_batch_args(total_accounts=None, worker_count=None, interval_min=None, interval_max=None):
+    """合并配置与参数，并做基础校验"""
+    total_accounts = TOTAL_ACCOUNTS if total_accounts is None else total_accounts
+    worker_count = BATCH_WORKER_COUNT if worker_count is None else worker_count
+    interval_min = BATCH_INTERVAL_MIN if interval_min is None else interval_min
+    interval_max = BATCH_INTERVAL_MAX if interval_max is None else interval_max
+
+    total_accounts = int(total_accounts)
+    worker_count = int(worker_count)
+    interval_min = int(interval_min)
+    interval_max = int(interval_max)
+
+    if total_accounts < 1:
+        raise ValueError("count 必须 >= 1")
+    if worker_count < 1:
+        raise ValueError("worker_count 必须 >= 1")
+    if interval_min < 0 or interval_max < 0:
+        raise ValueError("interval_min/interval_max 必须 >= 0")
+    if interval_min > interval_max:
+        raise ValueError("interval_min 不能大于 interval_max")
+
+    worker_count = min(worker_count, total_accounts)
+    return total_accounts, worker_count, interval_min, interval_max
+
+
+def run_batch(total_accounts=None, worker_count=None, interval_min=None, interval_max=None):
     """
     批量注册账号
     """
+    total_accounts, worker_count, interval_min, interval_max = _normalize_batch_args(
+        total_accounts=total_accounts,
+        worker_count=worker_count,
+        interval_min=interval_min,
+        interval_max=interval_max,
+    )
+
     print("\n" + "=" * 60)
-    print(f"🚀 开始批量注册，目标数量: {TOTAL_ACCOUNTS}")
+    print(f"🚀 开始批量注册，目标数量: {total_accounts}，并发数: {worker_count}")
     print("=" * 60 + "\n")
 
     print("\n⚠️  免责声明：本项目仅供学习研究使用。请勿用于商业用途或违规操作。")
@@ -273,37 +343,64 @@ def run_batch():
     fail_count = 0
     registered_accounts = []
     
-    for i in range(TOTAL_ACCOUNTS):
-        print("\n" + "#" * 60)
-        print(f"📝 正在注册第 {i + 1}/{TOTAL_ACCOUNTS} 个账号")
-        print("#" * 60 + "\n")
-        
-        email, password, success = register_one_account()
-        
-        if success:
-            success_count += 1
-            registered_accounts.append((email, password))
-        else:
-            fail_count += 1
-        
-        # 显示进度
-        print("\n" + "-" * 40)
-        print(f"📊 当前进度: {i + 1}/{TOTAL_ACCOUNTS}")
-        print(f"   ✅ 成功: {success_count}")
-        print(f"   ❌ 失败: {fail_count}")
-        print("-" * 40)
-        
-        # 如果还有下一个，等待随机时间
-        if i < TOTAL_ACCOUNTS - 1:
-            wait_time = random.randint(BATCH_INTERVAL_MIN, BATCH_INTERVAL_MAX)
-            print(f"\n⏳ 等待 {wait_time} 秒后继续下一个注册...")
-            time.sleep(wait_time)
+    task_queue = queue.Queue()
+    for index in range(1, total_accounts + 1):
+        task_queue.put(index)
+
+    progress_lock = threading.Lock()
+
+    def register_worker(worker_id):
+        nonlocal success_count, fail_count
+
+        while True:
+            try:
+                task_index = task_queue.get_nowait()
+            except queue.Empty:
+                return
+
+            print("\n" + "#" * 60)
+            print(f"📝 Worker-{worker_id} 正在注册第 {task_index}/{total_accounts} 个账号")
+            print("#" * 60 + "\n")
+
+            try:
+                email, password, success = register_one_account()
+
+                with progress_lock:
+                    if success:
+                        success_count += 1
+                        registered_accounts.append((email, password))
+                    else:
+                        fail_count += 1
+
+                    done = success_count + fail_count
+                    print("\n" + "-" * 40)
+                    print(f"📊 当前进度: {done}/{total_accounts}")
+                    print(f"   ✅ 成功: {success_count}")
+                    print(f"   ❌ 失败: {fail_count}")
+                    print("-" * 40)
+
+            finally:
+                task_queue.task_done()
+
+            if not task_queue.empty():
+                wait_time = random.randint(interval_min, interval_max)
+                print(f"\n⏳ Worker-{worker_id} 等待 {wait_time} 秒后继续...")
+                time.sleep(wait_time)
+
+    workers = []
+    for worker_id in range(1, worker_count + 1):
+        worker = threading.Thread(target=register_worker, args=(worker_id,), daemon=True)
+        worker.start()
+        workers.append(worker)
+
+    for worker in workers:
+        worker.join()
     
     # 最终统计
     print("\n" + "=" * 60)
     print("🏁 批量注册完成")
     print("=" * 60)
-    print(f"   总计: {TOTAL_ACCOUNTS}")
+    print(f"   总计: {total_accounts}")
     print(f"   ✅ 成功: {success_count}")
     print(f"   ❌ 失败: {fail_count}")
     
@@ -316,4 +413,10 @@ def run_batch():
 
 
 if __name__ == "__main__":
-    run_batch()
+    args = parse_args()
+    run_batch(
+        total_accounts=args.count,
+        worker_count=args.worker_count,
+        interval_min=args.interval_min,
+        interval_max=args.interval_max,
+    )

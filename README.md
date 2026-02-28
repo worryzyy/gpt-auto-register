@@ -98,6 +98,12 @@ uv run server.py
 
 ```bash
 uv run main.py
+# 指定注册数量与并发
+uv run main.py --count 10 --worker-count 3
+# 可选：覆盖批次间隔
+uv run main.py --count 10 --worker-count 3 --interval-min 5 --interval-max 12
+# Windows 编码异常时可强制去掉 emoji 日志
+$env:NO_EMOJI_LOG="1"; uv run main.py --count 10 --worker-count 3
 ```
 
 
@@ -145,6 +151,7 @@ retry:
 
 # 批量注册配置
 batch:
+  worker_count: 1
   interval_min: 5
   interval_max: 15
 
@@ -175,6 +182,7 @@ payment:
 | 配置项 | 路径 | 默认值 | 说明 |
 |--------|------|--------|------|
 | 注册数量 | `registration.total_accounts` | 1 | 要注册的账号数量 |
+| 并发数量 | `batch.worker_count` | 1 | 并发注册线程数（会自动限制为不超过注册数量） |
 | 最小年龄 | `registration.min_age` | 20 | 随机生日的最小年龄 |
 | 最大年龄 | `registration.max_age` | 40 | 随机生日的最大年龄 |
 | 密码长度 | `password.length` | 16 | 密码长度 |

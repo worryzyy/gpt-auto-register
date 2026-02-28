@@ -15,6 +15,7 @@
 
 import os
 import sys
+import builtins
 from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Optional, Dict, Any, List
@@ -26,6 +27,33 @@ except ImportError:
     print("❌ 缺少 PyYAML 依赖，请先安装:")
     print("   pip install pyyaml")
     sys.exit(1)
+
+
+def _to_console_safe_text(value: Any, encoding: str) -> str:
+    return str(value).encode(encoding, errors="ignore").decode(encoding, errors="ignore")
+
+
+_raw_print = builtins.print
+_force_ascii_console = os.getenv("NO_EMOJI_LOG", "").lower() in {"1", "true", "yes", "on"}
+
+
+def _safe_print(*args, **kwargs):
+    stream = kwargs.get("file", sys.stdout)
+    encoding = getattr(stream, "encoding", None) or "utf-8"
+
+    if _force_ascii_console:
+        safe_args = [_to_console_safe_text(arg, encoding) for arg in args]
+        _raw_print(*safe_args, **kwargs)
+        return
+
+    try:
+        _raw_print(*args, **kwargs)
+    except UnicodeEncodeError:
+        safe_args = [_to_console_safe_text(arg, encoding) for arg in args]
+        _raw_print(*safe_args, **kwargs)
+
+
+builtins.print = _safe_print
 
 
 # ==============================================================
