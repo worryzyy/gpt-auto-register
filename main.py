@@ -155,8 +155,31 @@ def register_one_account(monitor_callback=None):
                 )
                 _report("sub2api_oauth_done")
 
-                # 调用 sub2api 创建账号
-                client.create_account_from_oauth(session_id, code, state, name=email)
+                # 调用 sub2api 创建账号（带调度参数）
+                created_account = client.create_account_from_oauth(
+                    session_id,
+                    code,
+                    state,
+                    name=email,
+                    concurrency=cfg.sub2api.concurrency,
+                    priority=cfg.sub2api.priority,
+                    group_ids=(cfg.sub2api.group_ids or None)
+                )
+
+                # 兼容旧版后端：再调用一次更新接口兜底，确保并发/优先级/分组生效
+                account_id = created_account.get('id')
+                needs_update = (
+                    cfg.sub2api.concurrency is not None
+                    or cfg.sub2api.priority is not None
+                    or bool(cfg.sub2api.group_ids)
+                )
+                if account_id and needs_update:
+                    client.update_account(
+                        account_id,
+                        concurrency=cfg.sub2api.concurrency,
+                        priority=cfg.sub2api.priority,
+                        group_ids=(cfg.sub2api.group_ids or None)
+                    )
 
                 update_account_status(email, "已绑定sub2api")
                 print("✅ sub2api 绑定完成！")

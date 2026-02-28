@@ -80,7 +80,7 @@ def create_temp_email():
     return None, None
 
 
-def fetch_emails(jwt_token: str):
+def fetch_emails(jwt_token: str, debug: bool = False):
     """
     获取邮件列表
     
@@ -96,6 +96,8 @@ def fetch_emails(jwt_token: str):
     }
     
     try:
+        if debug:
+            print(f"  📡 请求邮箱接口: {EMAIL_WORKER_URL}/api/mails?limit=20&offset=0")
         # API 需要 limit 和 offset 参数
         response = http_session.get(
             f"{EMAIL_WORKER_URL}/api/mails?limit=20&offset=0",
@@ -108,11 +110,18 @@ def fetch_emails(jwt_token: str):
             
             # 处理不同的返回格式
             if isinstance(result, list):
-                return result
+                emails = result
             elif isinstance(result, dict):
-                return result.get('results', result.get('mails', []))
+                emails = result.get('results', result.get('mails', []))
+            else:
+                emails = []
+
+            if debug:
+                print(f"  ✅ 邮箱接口响应成功，邮件数量: {len(emails)}")
+            return emails
         else:
-            print(f"  获取邮件错误: HTTP {response.status_code}")
+            body_preview = (response.text or "")[:160].replace("\n", " ")
+            print(f"  获取邮件错误: HTTP {response.status_code}, 响应: {body_preview}")
             
     except Exception as e:
         print(f"  获取邮件错误: {e}")
@@ -207,13 +216,21 @@ def wait_for_verification_email(jwt_token: str, timeout: int = None, exclude_ema
     """
     if timeout is None:
         timeout = EMAIL_WAIT_TIMEOUT
+    if not jwt_token:
+        print("❌ 缺少邮箱 JWT，无法自动拉取验证码")
+        return None
+
     excluded_ids = {str(x) for x in (exclude_email_ids or []) if x}
     
     print(f"⏳ 正在等待验证邮件（最长 {timeout} 秒）...")
+    print(f"   已排除历史邮件数量: {len(excluded_ids)}")
     start_time = time.time()
+    poll_round = 0
     
     while time.time() - start_time < timeout:
-        emails = fetch_emails(jwt_token)
+        poll_round += 1
+        print(f"  🔄 第 {poll_round} 次轮询邮箱...")
+        emails = fetch_emails(jwt_token, debug=True)
         
         if emails and len(emails) > 0:
             for email_item in emails:
@@ -233,49 +250,48 @@ def wait_for_verification_email(jwt_token: str, timeout: int = None, exclude_ema
                     sender = str(email_item.get('from') or email_item.get('source', '')).lower()
                     subject = email_item.get('subject', '') or ''
                     body = ''
-                
-                # 判断是否为 OpenAI 验证邮件
-                if 'openai' in sender or 'chatgpt' in subject.lower():
-                    print(f"\n📧 收到 OpenAI 验证邮件!")
-                    print(f"   主题: {subject}")
-                    
-                    # 先尝试从主题提取验证码
-                    code = extract_verification_code(subject)
+
+                # 不强依赖发件人字段，先直接尝试提取 6 位验证码
+                code = extract_verification_code(subject)
+                if code:
+                    print(f"\n📧 收到验证码邮件（主题命中）: {subject}")
+                    return code
+
+                if body:
+                    code = extract_verification_code(body)
                     if code:
+                        print(f"\n📧 收到验证码邮件（正文命中）: {subject}")
                         return code
-                    
-                    # 如果主题中没有，从正文提取
-                    if body:
-                        code = extract_verification_code(body)
-                        if code:
-                            return code
-                    
-                    # 如果还没有，尝试获取邮件详情
-                    if email_id:
-                        detail = get_email_detail(jwt_token, email_id)
-                        if detail:
-                            # 解析详情中的 raw
-                            detail_raw = detail.get('raw', '')
-                            if detail_raw:
-                                parsed_detail = parse_raw_email(detail_raw)
-                                code = extract_verification_code(parsed_detail['subject'])
-                                if code:
-                                    return code
-                                code = extract_verification_code(parsed_detail['body'])
-                                if code:
-                                    return code
-                            
-                            # 尝试其他字段
-                            content = (
-                                detail.get('html') or 
-                                detail.get('html_content') or 
-                                detail.get('text') or 
-                                detail.get('content', '')
-                            )
-                            if content:
-                                code = extract_verification_code(content)
-                                if code:
-                                    return code
+
+                # 如未匹配，再尝试读取详情做二次提取
+                if email_id:
+                    detail = get_email_detail(jwt_token, email_id)
+                    if detail:
+                        # 解析详情中的 raw
+                        detail_raw = detail.get('raw', '')
+                        if detail_raw:
+                            parsed_detail = parse_raw_email(detail_raw)
+                            code = extract_verification_code(parsed_detail['subject'])
+                            if code:
+                                print(f"\n📧 收到验证码邮件（详情主题命中）: {subject}")
+                                return code
+                            code = extract_verification_code(parsed_detail['body'])
+                            if code:
+                                print(f"\n📧 收到验证码邮件（详情正文命中）: {subject}")
+                                return code
+                        
+                        # 尝试其他字段
+                        content = (
+                            detail.get('html') or 
+                            detail.get('html_content') or 
+                            detail.get('text') or 
+                            detail.get('content', '')
+                        )
+                        if content:
+                            code = extract_verification_code(content)
+                            if code:
+                                print(f"\n📧 收到验证码邮件（详情内容命中）: {subject}")
+                                return code
         
         # 显示等待进度
         elapsed = int(time.time() - start_time)

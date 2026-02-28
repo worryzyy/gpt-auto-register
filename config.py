@@ -17,7 +17,7 @@ import os
 import sys
 from pathlib import Path
 from dataclasses import dataclass, field
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 
 # 尝试导入 yaml，如果未安装则提示
 try:
@@ -112,6 +112,9 @@ class Sub2ApiConfig:
     base_url: str = ""
     email: str = ""
     password: str = ""
+    concurrency: Optional[int] = None
+    priority: Optional[int] = None
+    group_ids: List[int] = field(default_factory=list)
 
 
 @dataclass
@@ -283,11 +286,19 @@ class ConfigLoader:
         # sub2api 自动绑定配置
         if 'sub2api' in self.raw_config:
             s2a = self.raw_config['sub2api']
+            raw_group_ids = s2a.get('group_ids', [])
+            if isinstance(raw_group_ids, list):
+                group_ids = [int(group_id) for group_id in raw_group_ids]
+            else:
+                group_ids = []
             self.config.sub2api = Sub2ApiConfig(
                 enabled=s2a.get('enabled', False),
                 base_url=s2a.get('base_url', ''),
                 email=s2a.get('email', ''),
-                password=s2a.get('password', '')
+                password=s2a.get('password', ''),
+                concurrency=(int(s2a['concurrency']) if s2a.get('concurrency') is not None else None),
+                priority=(int(s2a['priority']) if s2a.get('priority') is not None else None),
+                group_ids=group_ids
             )
     
     def reload(self) -> None:

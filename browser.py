@@ -6,6 +6,7 @@
 import time
 import os
 import re
+import sys
 import subprocess
 import undetected_chromedriver as uc
 from selenium.webdriver.common.by import By
@@ -285,6 +286,215 @@ def type_slowly(element, text, delay=0.05):
         time.sleep(delay)
 
 
+OPENAI_EMAIL_INPUT_SELECTORS = [
+    'input[name="email"]',
+    'input[name="identifier"]',
+    'input[name="username"]',
+    'input[type="email"]',
+    'input[autocomplete="email"]',
+    'input[autocomplete="username"]',
+]
+
+OPENAI_PASSWORD_INPUT_SELECTORS = [
+    'input[name="current-password"]',
+    'input[autocomplete="current-password"]',
+    'input[name="password"]',
+    'input[type="password"]',
+]
+
+OPENAI_SIGNUP_PASSWORD_INPUT_SELECTORS = [
+    'input[autocomplete="new-password"]',
+    'input[name="new-password"]',
+] + OPENAI_PASSWORD_INPUT_SELECTORS
+
+OPENAI_CODE_INPUT_SELECTORS = [
+    'input[name="code"]',
+    'input[autocomplete="one-time-code"]',
+    'input[id$="-code"]',
+    'input[placeholder*="验证码"]',
+    'input[placeholder*="代码"]',
+    'input[aria-label*="验证码"]',
+    'input[aria-label*="代码"]',
+]
+
+OPENAI_LOGIN_INPUT_SELECTORS = list(dict.fromkeys(
+    OPENAI_EMAIL_INPUT_SELECTORS
+    + OPENAI_PASSWORD_INPUT_SELECTORS
+    + OPENAI_CODE_INPUT_SELECTORS
+))
+
+OPENAI_SUBMIT_BUTTON_SELECTORS = [
+    'button[type="submit"]',
+    'button[name="action"]',
+    'button[data-testid*="continue"]',
+    'button[data-testid*="login"]',
+    'input[type="submit"]',
+]
+
+
+def _find_first_visible_input(driver, selectors):
+    for sel in selectors:
+        try:
+            elements = driver.find_elements(By.CSS_SELECTOR, sel)
+            for el in elements:
+                if _is_interactable_input(driver, el):
+                    return el, sel
+        except Exception:
+            continue
+    return None, None
+
+
+def _wait_for_visible_input(driver, selectors, timeout=30, poll_interval=0.5):
+    start = time.time()
+    while time.time() - start < timeout:
+        input_el, matched_selector = _find_first_visible_input(driver, selectors)
+        if input_el:
+            return input_el, matched_selector
+        time.sleep(poll_interval)
+    return None, None
+
+
+def _click_visible_element(driver, element) -> bool:
+    try:
+        element.click()
+        return True
+    except Exception:
+        try:
+            driver.execute_script("arguments[0].click();", element)
+            return True
+        except Exception:
+            return False
+
+
+def _is_interactable_input(driver, element) -> bool:
+    try:
+        if (not element) or (not element.is_displayed()) or (not element.is_enabled()):
+            return False
+        readonly = (element.get_attribute('readonly') or '').lower()
+        if readonly in ('true', 'readonly'):
+            return False
+        return bool(driver.execute_script("""
+            const el = arguments[0];
+            if (!el) return false;
+            const rect = el.getBoundingClientRect();
+            if (rect.width < 4 || rect.height < 4) return false;
+            if (rect.bottom < 0 || rect.top > window.innerHeight) return false;
+            const style = window.getComputedStyle(el);
+            if (!style) return false;
+            if (style.visibility === 'hidden') return false;
+            if (style.display === 'none') return false;
+            if (style.pointerEvents === 'none') return false;
+            if (parseFloat(style.opacity || '1') < 0.1) return false;
+            return true;
+        """, element))
+    except Exception:
+        return False
+
+
+def _input_value_equals(driver, input_el, value: str) -> bool:
+    try:
+        dom_value = input_el.get_attribute('value') or ''
+        js_value = driver.execute_script("return arguments[0] ? (arguments[0].value || '') : '';", input_el) or ''
+        return dom_value == value and js_value == value
+    except Exception:
+        return False
+
+
+def _clear_input_with_shortcuts(input_el):
+    input_el.send_keys(Keys.CONTROL, 'a')
+    input_el.send_keys(Keys.DELETE)
+
+
+def _set_controlled_input_value(driver, input_el, value: str, field_name: str) -> bool:
+    """兼容 React Aria 受控输入框。"""
+    try:
+        driver.execute_script("arguments[0].focus(); arguments[0].click();", input_el)
+        time.sleep(0.2)
+        try:
+            _clear_input_with_shortcuts(input_el)
+            type_slowly(input_el, value, delay=0.03)
+        except Exception:
+            pass
+        time.sleep(0.4)
+        if _input_value_equals(driver, input_el, value):
+            time.sleep(0.2)
+            return _input_value_equals(driver, input_el, value)
+
+        driver.execute_script("""
+            var el = arguments[0];
+            var val = arguments[1];
+            var nativeSetter = Object.getOwnPropertyDescriptor(
+                window.HTMLInputElement.prototype, 'value'
+            ).set;
+            nativeSetter.call(el, val);
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+            el.dispatchEvent(new Event('blur', { bubbles: true }));
+            el.dispatchEvent(new Event('focus', { bubbles: true }));
+        """, input_el, value)
+        time.sleep(0.4)
+        if _input_value_equals(driver, input_el, value):
+            time.sleep(0.2)
+            return _input_value_equals(driver, input_el, value)
+
+        print(f"  ⚠️ {field_name} JS 注入不完整，尝试 ActionChains...")
+        actions = ActionChains(driver)
+        input_el.click()
+        actions.key_down(Keys.CONTROL).send_keys('a').key_up(Keys.CONTROL)
+        actions.send_keys(Keys.DELETE)
+        actions.pause(0.2)
+        actions.send_keys(value)
+        actions.perform()
+        time.sleep(0.4)
+        if _input_value_equals(driver, input_el, value):
+            time.sleep(0.2)
+            return _input_value_equals(driver, input_el, value)
+        return False
+    except Exception as e:
+        print(f"  ⚠️ 设置{field_name}失败: {e}")
+        return False
+
+
+def _click_submit_button(driver) -> bool:
+    for selector in OPENAI_SUBMIT_BUTTON_SELECTORS:
+        try:
+            buttons = driver.find_elements(By.CSS_SELECTOR, selector)
+            for btn in buttons:
+                if not btn.is_displayed() or not btn.is_enabled():
+                    continue
+                if _click_visible_element(driver, btn):
+                    return True
+        except Exception:
+            continue
+    return False
+
+
+def _switch_to_password_login_mode(driver):
+    try:
+        switch_candidates = driver.find_elements(
+            By.XPATH,
+            '//*[contains(text(), "密码") or contains(text(), "Password") or contains(text(), "password")]'
+        )
+        for el in switch_candidates:
+            if not el.is_displayed():
+                continue
+            text = el.text
+            if any(keyword in text for keyword in [
+                '输入密码',
+                'Enter password',
+                '使用密码',
+                'password instead',
+                'Use password',
+                'use password',
+            ]):
+                print(f"  🔄 切换到密码登录模式: '{text}'")
+                _click_visible_element(driver, el)
+                time.sleep(2)
+                return
+    except Exception:
+        pass
+
+
 def fill_signup_form(driver, email: str, password: str):
     """
     填写注册表单
@@ -298,8 +508,6 @@ def fill_signup_form(driver, email: str, password: str):
     返回:
         bool: 是否成功填写
     """
-    wait = WebDriverWait(driver, MAX_WAIT_TIME)
-    
     try:
         # 1. 等待邮箱输入框出现
         print(f"DEBUG: 当前页面标题: {driver.title}")
@@ -356,59 +564,50 @@ def fill_signup_form(driver, email: str, password: str):
         except Exception as e:
             print(f"  ⚠️ 检查入口按钮时出错 (非致命): {e}")
 
-        email_input = WebDriverWait(driver, SHORT_WAIT_TIME).until(
-            EC.visibility_of_element_located((
-                By.CSS_SELECTOR, 
-                'input[type="email"], input[name="email"], input[autocomplete="email"]'
-            ))
+        email_input, matched_selector = _wait_for_visible_input(
+            driver,
+            OPENAI_EMAIL_INPUT_SELECTORS,
+            timeout=SHORT_WAIT_TIME
         )
-        
-        # 使用 ActionChains 模拟真实用户操作
-        print("📝 正在输入邮箱...")
-        actions = ActionChains(driver)
-        actions.move_to_element(email_input)
-        actions.click()
-        actions.pause(0.3)
-        actions.send_keys(email)
-        actions.perform()
-        
+        if not email_input:
+            raise Exception("未找到邮箱输入框")
+
+        print(f"📝 正在输入邮箱 ({matched_selector})...")
+        if not _set_controlled_input_value(driver, email_input, email, "邮箱"):
+            print("❌ 输入邮箱失败")
+            return False
+        print(f"✅ 已输入邮箱: {email}")
         time.sleep(1)
-        
-        # 验证输入是否成功
-        actual_value = email_input.get_attribute('value')
-        if actual_value == email:
-            print(f"✅ 已输入邮箱: {email}")
-        else:
-            print(f"⚠️ 输入可能不完整，实际值: {actual_value}")
-        
-        time.sleep(1)
-        
+
         # 2. 点击继续按钮
         print("🔘 点击继续按钮...")
-        continue_btn = wait.until(
-            EC.element_to_be_clickable((By.CSS_SELECTOR, 'button[type="submit"]'))
-        )
-        actions = ActionChains(driver)
-        actions.move_to_element(continue_btn)
-        actions.click()
-        actions.perform()
+        if not _click_submit_button(driver):
+            print("❌ 点击继续按钮失败")
+            return False
         print("✅ 已点击继续")
         time.sleep(3)
-        
+
         # 4. 输入密码
         print("🔑 等待密码输入框...")
-        password_input = WebDriverWait(driver, SHORT_WAIT_TIME).until(
-            EC.visibility_of_element_located((By.CSS_SELECTOR, 'input[autocomplete="new-password"]'))
+        password_input, matched_selector = _wait_for_visible_input(
+            driver,
+            OPENAI_SIGNUP_PASSWORD_INPUT_SELECTORS,
+            timeout=SHORT_WAIT_TIME
         )
-        password_input.clear()
-        time.sleep(0.5)
-        type_slowly(password_input, password)
+        if not password_input:
+            print("❌ 未找到密码输入框")
+            return False
+
+        print(f"📝 正在输入密码 ({matched_selector})...")
+        if not _set_controlled_input_value(driver, password_input, password, "密码"):
+            print("❌ 输入密码失败")
+            return False
         print("✅ 已输入密码")
-        time.sleep(2)
-        
+        time.sleep(1)
+
         # 5. 点击继续
         print("🔘 点击继续按钮...")
-        if not click_button_with_retry(driver, 'button[type="submit"]'):
+        if not _click_submit_button(driver):
             print("❌ 点击继续按钮失败")
             return False
         print("✅ 已点击继续")
@@ -594,21 +793,25 @@ def enter_verification_code(driver, code: str):
         while check_and_handle_error(driver):
             time.sleep(2)
         
-        code_input = WebDriverWait(driver, 60).until(
-            EC.visibility_of_element_located((
-                By.CSS_SELECTOR, 
-                'input[name="code"], input[placeholder*="代码"], input[aria-label*="代码"]'
-            ))
+        code_input, matched_selector = _wait_for_visible_input(
+            driver,
+            OPENAI_CODE_INPUT_SELECTORS,
+            timeout=60
         )
-        code_input.clear()
-        time.sleep(0.5)
-        type_slowly(code_input, code, delay=0.1)
+        if not code_input:
+            print("❌ 未找到验证码输入框")
+            return False
+
+        print(f"   检测到验证码输入框: {matched_selector}")
+        if not _set_controlled_input_value(driver, code_input, code, "验证码"):
+            print("❌ 输入验证码失败")
+            return False
         print(f"✅ 已输入验证码: {code}")
-        time.sleep(2)
+        time.sleep(1)
         
         # 点击继续
         print("🔘 点击继续按钮...")
-        if not click_button_with_retry(driver, 'button[type="submit"]'):
+        if not _click_submit_button(driver):
             print("❌ 点击继续按钮失败")
             return False
         print("✅ 已点击继续")
@@ -1704,98 +1907,77 @@ def _handle_oauth_login(driver, email: str, password: str, wait, email_jwt_token
         wait: WebDriverWait 实例
         email_jwt_token: 临时邮箱 JWT，用于自动拉取验证码（可选）
     """
-    def _set_controlled_input_value(input_el, value: str, field_name: str) -> bool:
-        """兼容 React Aria 受控输入框。"""
-        try:
-            driver.execute_script("arguments[0].focus(); arguments[0].click();", input_el)
-            time.sleep(0.2)
-            driver.execute_script("""
-                var el = arguments[0];
-                var val = arguments[1];
-                var nativeSetter = Object.getOwnPropertyDescriptor(
-                    window.HTMLInputElement.prototype, 'value'
-                ).set;
-                nativeSetter.call(el, val);
-                el.dispatchEvent(new Event('input', { bubbles: true }));
-                el.dispatchEvent(new Event('change', { bubbles: true }));
-            """, input_el, value)
-            time.sleep(0.4)
-
-            if (input_el.get_attribute('value') or '') == value:
-                return True
-
-            print(f"   ⚠️ {field_name} JS 注入不完整，尝试 ActionChains...")
-            actions = ActionChains(driver)
-            input_el.click()
-            actions.key_down(Keys.CONTROL).send_keys('a').key_up(Keys.CONTROL)
-            actions.send_keys(Keys.DELETE)
-            actions.pause(0.2)
-            actions.send_keys(value)
-            actions.perform()
-            time.sleep(0.4)
-            return (input_el.get_attribute('value') or '') == value
-        except Exception as e:
-            print(f"   ⚠️ 设置{field_name}失败: {e}")
-            return False
-
-    def _click_submit_button() -> bool:
-        submit_selectors = [
-            'button[type="submit"]',
-            'button[name="action"]',
-            'button[data-testid*="continue"]',
-            'button[data-testid*="login"]',
-            'input[type="submit"]'
-        ]
-        for selector in submit_selectors:
+    def _has_visible_login_inputs() -> bool:
+        for sel in OPENAI_LOGIN_INPUT_SELECTORS:
             try:
-                buttons = driver.find_elements(By.CSS_SELECTOR, selector)
-                for btn in buttons:
-                    if btn.is_displayed() and btn.is_enabled():
-                        driver.execute_script("arguments[0].click();", btn)
+                for el in driver.find_elements(By.CSS_SELECTOR, sel):
+                    if el.is_displayed():
+                        return True
+            except:
+                continue
+        return False
+
+    def _is_consent_screen() -> bool:
+        if _has_visible_login_inputs():
+            return False
+        current_url = (driver.current_url or '').lower()
+        if (
+            'auth.openai.com' in current_url
+            and (
+                '/oauth/authorize' in current_url
+                or '/consent' in current_url
+                or 'sign-in-with-chatgpt' in current_url
+            )
+        ):
+            return True
+        consent_xpaths = [
+            "//button[contains(., 'Allow')]",
+            "//button[contains(., 'Authorize')]",
+            "//button[contains(., '允许')]",
+            "//button[contains(., '授权')]",
+            "//button[contains(., 'Continue')]",
+            "//button[contains(., '继续')]",
+            "//button[contains(@data-testid, 'continue')]",
+            "//button[contains(@data-testid, 'consent')]",
+            "//input[@type='submit' and @value='Allow']",
+            "//input[@type='submit' and @value='Authorize']",
+            "//input[@type='submit' and @value='Continue']",
+        ]
+        for xp in consent_xpaths:
+            try:
+                for el in driver.find_elements(By.XPATH, xp):
+                    if el.is_displayed() and el.is_enabled():
                         return True
             except:
                 continue
         return False
 
     # 不依赖 URL 判断，直接检测页面上是否有邮箱输入框
-    email_selectors = [
-        'input[name="email"]',
-        'input[name="identifier"]',
-        'input[name="username"]',
-        'input[type="email"]',
-        'input[autocomplete="email"]',
-        'input[autocomplete="username"]',
-    ]
-
+    # 登录页可能异步加载，先等待元素出现再判定
     email_input = None
-    for sel in email_selectors:
-        try:
-            els = driver.find_elements(By.CSS_SELECTOR, sel)
-            for el in els:
-                if el.is_displayed():
-                    email_input = el
-                    print(f"   🔑 检测到登录页面，找到邮箱输入框: {sel}")
-                    break
-            if email_input:
-                break
-        except:
-            continue
+    login_probe_timeout = 20
+    probe_start = time.time()
+    while time.time() - probe_start < login_probe_timeout:
+        email_input, matched_selector = _find_first_visible_input(driver, OPENAI_EMAIL_INPUT_SELECTORS)
+        if email_input:
+            print(f"   🔑 检测到登录页面，找到邮箱输入框: {matched_selector}")
+            break
+
+        if _is_consent_screen():
+            print("   ℹ️ 检测到授权确认页，跳过登录输入")
+            return True
+
+        time.sleep(0.5)
 
     if not email_input:
         # 兜底：找页面上第一个可见的 text/email input
-        try:
-            all_inputs = driver.find_elements(By.CSS_SELECTOR, 'input[type="text"], input[type="email"]')
-            for inp in all_inputs:
-                if inp.is_displayed():
-                    email_input = inp
-                    print(f"   🔑 找到邮箱输入框 (兜底): name={inp.get_attribute('name')}")
-                    break
-        except:
-            pass
+        email_input, _ = _find_first_visible_input(driver, ['input[type="text"], input[type="email"]'])
+        if email_input:
+            print(f"   🔑 找到邮箱输入框 (兜底): name={email_input.get_attribute('name')}")
 
     if not email_input:
-        print("   ℹ️ 未检测到邮箱输入框，可能已登录或不在登录页面")
-        return True
+        print("   ⚠️ 未检测到邮箱输入框，且未识别到授权页")
+        return False
 
     print(f"   🔑 开始输入凭据...")
     existing_email_ids = set()
@@ -1809,9 +1991,65 @@ def _handle_oauth_login(driver, email: str, password: str, wait, email_jwt_token
         except Exception:
             existing_email_ids = set()
 
+    def _handle_oauth_code_step(wait_timeout: int = 30, prefetched_input=None, prefetched_selector: str = None) -> bool:
+        code_input = prefetched_input
+        matched_selector = prefetched_selector
+        if not code_input:
+            code_input, matched_selector = _wait_for_visible_input(
+                driver,
+                OPENAI_CODE_INPUT_SELECTORS,
+                timeout=wait_timeout
+            )
+
+        if not code_input:
+            return True
+
+        print(f"   🔢 检测到验证码输入框: {matched_selector}")
+        print("   🔢 检测到验证码登录模式，开始获取验证码...")
+        verification_code = None
+        if email_jwt_token:
+            try:
+                from email_service import wait_for_verification_email
+                verification_code = wait_for_verification_email(
+                    email_jwt_token,
+                    exclude_email_ids=existing_email_ids
+                )
+            except Exception as e:
+                print(f"   ⚠️ 自动获取验证码失败: {e}")
+        else:
+            print("   ⚠️ 缺少邮箱 JWT，无法自动拉取验证码")
+
+        if not verification_code:
+            if sys.stdin and sys.stdin.isatty():
+                print("   ⚠️ 自动获取验证码失败，请手动输入")
+                try:
+                    verification_code = input("⌨️ 请输入邮箱收到的 6 位验证码: ").strip()
+                except Exception:
+                    verification_code = None
+            else:
+                print("   ⚠️ 非交互模式，无法手动输入验证码")
+                verification_code = None
+
+        if not verification_code:
+            print("   ❌ 未获取到有效验证码，无法继续 OAuth 登录")
+            return False
+
+        # 复用注册流程里的验证码输入逻辑
+        if not enter_verification_code(driver, verification_code):
+            print("   ⚠️ OAuth 登录验证码提交失败")
+            return False
+
+        # 验证码提交后可能会进入授权确认页，主动点击继续/授权
+        time.sleep(2)
+        if _is_consent_screen():
+            print("   🔘 验证码后检测到授权确认页，尝试点击继续/授权...")
+            _click_authorize_button(driver)
+
+        return True
+
     # 输入邮箱
     try:
-        if not _set_controlled_input_value(email_input, email, "邮箱"):
+        if not _set_controlled_input_value(driver, email_input, email, "邮箱"):
             print("   ⚠️ 输入邮箱失败")
             return False
 
@@ -1819,7 +2057,7 @@ def _handle_oauth_login(driver, email: str, password: str, wait, email_jwt_token
         time.sleep(1)
 
         # 点击继续
-        if not _click_submit_button():
+        if not _click_submit_button(driver):
             print("   ⚠️ 未找到可点击的继续按钮")
             return False
         print("   ✅ 已点击继续")
@@ -1829,138 +2067,126 @@ def _handle_oauth_login(driver, email: str, password: str, wait, email_jwt_token
         return False
 
     # 检查是否需要切换到密码登录模式（OpenAI 可能默认验证码登录）
-    try:
-        switch_candidates = driver.find_elements(By.XPATH,
-            '//*[contains(text(), "密码") or contains(text(), "Password") or contains(text(), "password")]'
-        )
-        for el in switch_candidates:
-            if not el.is_displayed():
-                continue
-            text = el.text
-            if any(k in text for k in [
-                '输入密码', 'Enter password', '使用密码', 'password instead',
-                'Use password', 'use password'
-            ]):
-                print(f"   🔄 切换到密码登录模式: '{text}'")
-                try:
-                    el.click()
-                except:
-                    driver.execute_script("arguments[0].click();", el)
-                time.sleep(2)
-                break
-    except:
-        pass
-
-    short_wait = WebDriverWait(driver, 30)
+    _switch_to_password_login_mode(driver)
 
     # 输入密码
-    password_input = None
-    try:
-        password_input = short_wait.until(EC.visibility_of_element_located((
-            By.CSS_SELECTOR,
-            'input[name="current-password"], input[autocomplete="current-password"], input[name="password"], input[type="password"]'
-        )))
-    except Exception:
-        password_input = None
+    password_input, matched_selector = _wait_for_visible_input(
+        driver,
+        OPENAI_PASSWORD_INPUT_SELECTORS,
+        timeout=30
+    )
 
     if password_input:
-        if not _set_controlled_input_value(password_input, password, "密码"):
+        print(f"   🔑 检测到密码输入框: {matched_selector}")
+        if not _set_controlled_input_value(driver, password_input, password, "密码"):
             print("   ⚠️ 输入密码失败")
             return False
 
         print("   ✅ 已输入密码")
         time.sleep(1)
-        if not _click_submit_button():
+        if not _click_submit_button(driver):
             print("   ⚠️ 未找到可点击的登录按钮")
             return False
         print("   ✅ 已点击登录")
-        time.sleep(5)
+        time.sleep(3)
+        if not _handle_oauth_code_step(wait_timeout=25):
+            return False
+
+        if _is_consent_screen():
+            print("   🔘 检测到授权确认页，尝试点击继续/授权...")
+            _click_authorize_button(driver)
+
         print("   ✅ 登录流程完成，等待授权页面...")
         time.sleep(3)
         return True
 
     # 密码框不存在时，处理验证码登录流
-    code_input = None
-    try:
-        code_input = short_wait.until(EC.visibility_of_element_located((
-            By.CSS_SELECTOR,
-            'input[name="code"], input[autocomplete="one-time-code"], input[id$="-code"], input[placeholder*="验证码"], input[aria-label*="验证码"]'
-        )))
-    except Exception:
-        code_input = None
+    code_input, matched_selector = _wait_for_visible_input(
+        driver,
+        OPENAI_CODE_INPUT_SELECTORS,
+        timeout=30
+    )
 
     if not code_input:
+        if _is_consent_screen():
+            print("   ℹ️ 当前已在授权确认页，跳过验证码输入")
+            _click_authorize_button(driver)
+            print("   ✅ 登录流程完成，等待授权页面...")
+            time.sleep(3)
+            return True
         print("   ⚠️ 未找到密码框或验证码输入框，可能页面结构已变化")
         return False
 
-    print("   🔢 检测到验证码登录模式，开始获取验证码...")
-    verification_code = None
-    if email_jwt_token:
-        try:
-            from email_service import wait_for_verification_email
-            verification_code = wait_for_verification_email(
-                email_jwt_token,
-                exclude_email_ids=existing_email_ids
-            )
-        except Exception as e:
-            print(f"   ⚠️ 自动获取验证码失败: {e}")
-
-    if not verification_code:
-        print("   ⚠️ 自动获取验证码失败，请手动输入")
-        try:
-            verification_code = input("⌨️ 请输入邮箱收到的 6 位验证码: ").strip()
-        except Exception:
-            verification_code = None
-
-    if not verification_code:
-        print("   ❌ 未获取到有效验证码，无法继续 OAuth 登录")
+    if not _handle_oauth_code_step(
+        wait_timeout=0,
+        prefetched_input=code_input,
+        prefetched_selector=matched_selector
+    ):
         return False
-
-    if not _set_controlled_input_value(code_input, verification_code, "验证码"):
-        print("   ⚠️ 输入验证码失败")
-        return False
-
-    print("   ✅ 已输入验证码")
-    time.sleep(1)
-    if not _click_submit_button():
-        print("   ⚠️ 未找到可点击的验证码提交按钮")
-        return False
-    print("   ✅ 已提交验证码")
-    time.sleep(5)
 
     print("   ✅ 登录流程完成，等待授权页面...")
     time.sleep(3)
     return True
 
 
-def _click_authorize_button(driver):
+def _click_authorize_button(driver) -> bool:
     """尝试点击 OAuth 授权按钮"""
+    # 若当前仍是登录页，避免把“继续”误当成授权按钮
+    for sel in OPENAI_LOGIN_INPUT_SELECTORS:
+        try:
+            for el in driver.find_elements(By.CSS_SELECTOR, sel):
+                if el.is_displayed():
+                    print("   ⚠️ 当前仍在登录页，跳过点击授权按钮")
+                    return False
+        except:
+            continue
+
+    current_url = (driver.current_url or '').lower()
+    consent_like_url = (
+        'auth.openai.com' in current_url
+        and (
+            '/oauth/authorize' in current_url
+            or '/consent' in current_url
+            or 'sign-in-with-chatgpt' in current_url
+        )
+    )
+
     authorize_selectors = [
-        "//button[contains(text(), 'Allow')]",
-        "//button[contains(text(), 'Authorize')]",
-        "//button[contains(text(), 'Continue')]",
-        "//button[contains(text(), '允许')]",
-        "//button[contains(text(), '授权')]",
-        "//button[contains(text(), '继续')]",
+        "//button[contains(., 'Allow')]",
+        "//button[contains(., 'Authorize')]",
+        "//button[contains(., '允许')]",
+        "//button[contains(., '授权')]",
         "//input[@type='submit' and @value='Allow']",
+        "//input[@type='submit' and @value='Authorize']",
+        "//button[contains(., 'Continue')]",
+        "//button[contains(., '继续')]",
+        "//button[contains(@data-testid, 'continue')]",
+        "//button[contains(@data-testid, 'consent')]",
         "//input[@type='submit' and @value='Continue']",
-        "//button[@type='submit']",
     ]
 
     for selector in authorize_selectors:
+        # "Continue/继续" 仅在授权确认页尝试，避免误点登录流程里的继续
+        if (
+            ("Continue" in selector or "继续" in selector or "continue" in selector)
+            and not consent_like_url
+        ):
+            continue
         try:
-            btn = driver.find_element(By.XPATH, selector)
-            if btn.is_displayed() and btn.is_enabled():
-                print(f"   找到授权按钮: {btn.text or btn.get_attribute('value') or 'submit'}")
-                time.sleep(1)
-                btn.click()
-                print("   ✅ 已点击授权按钮")
-                time.sleep(3)
-                return
+            buttons = driver.find_elements(By.XPATH, selector)
+            for btn in buttons:
+                if btn.is_displayed() and btn.is_enabled():
+                    print(f"   找到授权按钮: {btn.text or btn.get_attribute('value') or 'submit'}")
+                    time.sleep(1)
+                    btn.click()
+                    print("   ✅ 已点击授权按钮")
+                    time.sleep(3)
+                    return True
         except:
             continue
 
     print("   ℹ️ 未找到授权按钮，可能会自动重定向")
+    return False
 
 
 def _wait_for_oauth_redirect(driver, max_wait: int = 60, expected_redirect_uri: str = None) -> bool:

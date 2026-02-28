@@ -6,6 +6,7 @@ sub2api 服务客户端
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+from typing import Optional, List
 
 
 class Sub2ApiClient:
@@ -94,7 +95,16 @@ class Sub2ApiClient:
         print(f"✅ OAuth URL 已生成 (session: {session_id[:8]}...)")
         return auth_url, session_id
 
-    def create_account_from_oauth(self, session_id: str, code: str, state: str, name: str = None) -> dict:
+    def create_account_from_oauth(
+        self,
+        session_id: str,
+        code: str,
+        state: str,
+        name: str = None,
+        concurrency: Optional[int] = None,
+        priority: Optional[int] = None,
+        group_ids: Optional[List[int]] = None
+    ) -> dict:
         """
         使用 OAuth 授权码在 sub2api 中创建账号
         POST /api/v1/admin/openai/create-from-oauth
@@ -118,6 +128,12 @@ class Sub2ApiClient:
         }
         if name:
             payload['name'] = name
+        if concurrency is not None:
+            payload['concurrency'] = int(concurrency)
+        if priority is not None:
+            payload['priority'] = int(priority)
+        if group_ids is not None:
+            payload['group_ids'] = list(group_ids)
 
         print("📤 正在调用 sub2api 创建 OpenAI 账号...")
         resp = self.session.post(url, json=payload, headers=self._headers(), timeout=60)
@@ -131,6 +147,44 @@ class Sub2ApiClient:
         account_id = account.get('id', 'N/A')
         account_name = account.get('name', 'N/A')
         print(f"✅ sub2api 账号创建成功! ID: {account_id}, Name: {account_name}")
+        return account
+
+    def update_account(
+        self,
+        account_id: int,
+        concurrency: Optional[int] = None,
+        priority: Optional[int] = None,
+        group_ids: Optional[List[int]] = None
+    ) -> dict:
+        """
+        更新 sub2api 账号调度配置
+        PUT /api/v1/admin/accounts/{id}
+        """
+        if not self.token:
+            raise Exception("未登录 sub2api，请先调用 login()")
+
+        url = f'{self.base_url}/api/v1/admin/accounts/{int(account_id)}'
+        payload = {}
+        if concurrency is not None:
+            payload['concurrency'] = int(concurrency)
+        if priority is not None:
+            payload['priority'] = int(priority)
+        if group_ids is not None:
+            payload['group_ids'] = list(group_ids)
+
+        if not payload:
+            return {}
+
+        print(f"📤 正在更新 sub2api 账号配置... (ID: {account_id})")
+        resp = self.session.put(url, json=payload, headers=self._headers(), timeout=60)
+        resp.raise_for_status()
+
+        data = resp.json()
+        if data.get('code') != 0:
+            raise Exception(f"更新账号失败: {data.get('message', 'Unknown error')}")
+
+        account = data.get('data', {})
+        print(f"✅ sub2api 账号配置更新成功! ID: {account.get('id', account_id)}")
         return account
 
     def refresh_openai_token(self, refresh_token: str) -> dict:
