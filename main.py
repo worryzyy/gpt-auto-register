@@ -155,7 +155,7 @@ def register_one_account(monitor_callback=None):
                 )
                 _report("sub2api_oauth_done")
 
-                # 调用 sub2api 创建账号（带调度参数）
+                # 1) 创建账号（优先带并发/优先级/分组）
                 created_account = client.create_account_from_oauth(
                     session_id,
                     code,
@@ -166,20 +166,64 @@ def register_one_account(monitor_callback=None):
                     group_ids=(cfg.sub2api.group_ids or None)
                 )
 
-                # 兼容旧版后端：再调用一次更新接口兜底，确保并发/优先级/分组生效
                 account_id = created_account.get('id')
+                if not account_id:
+                    raise Exception("sub2api 创建账号成功但未返回 account_id")
+
+                # 2) 最小字段更新兜底
                 needs_update = (
                     cfg.sub2api.concurrency is not None
                     or cfg.sub2api.priority is not None
                     or bool(cfg.sub2api.group_ids)
                 )
-                if account_id and needs_update:
+                if needs_update:
                     client.update_account(
                         account_id,
                         concurrency=cfg.sub2api.concurrency,
                         priority=cfg.sub2api.priority,
                         group_ids=(cfg.sub2api.group_ids or None)
                     )
+
+                # 3) 查询完整参数后，按你要求调用 /api/v1/admin/accounts/{id} 做整包更新
+                try:
+                    latest_account = client.get_account(account_id)
+                except Exception as detail_err:
+                    print(f"⚠️ 查询账号详情失败，改用创建返回数据兜底: {detail_err}")
+                    latest_account = created_account
+
+                full_payload = {
+                    'name': latest_account.get('name', email),
+                    'notes': latest_account.get('notes', ''),
+                    'proxy_id': latest_account.get('proxy_id', 0),
+                    'concurrency': (
+                        int(cfg.sub2api.concurrency)
+                        if cfg.sub2api.concurrency is not None
+                        else int(latest_account.get('concurrency', 0))
+                    ),
+                    'priority': (
+                        int(cfg.sub2api.priority)
+                        if cfg.sub2api.priority is not None
+                        else int(latest_account.get('priority', 0))
+                    ),
+                    'rate_multiplier': latest_account.get('rate_multiplier', 1),
+                    'status': latest_account.get('status', 'active'),
+                    'group_ids': (
+                        list(cfg.sub2api.group_ids)
+                        if cfg.sub2api.group_ids
+                        else list(latest_account.get('group_ids', []))
+                    ),
+                    'expires_at': latest_account.get('expires_at', 0),
+                    'auto_pause_on_expired': latest_account.get('auto_pause_on_expired', True),
+                    'credentials': latest_account.get('credentials', {}),
+                    'extra': latest_account.get('extra', {}),
+                }
+                synced_account = client.update_account_full(account_id, full_payload)
+                print(
+                    "✅ sub2api 参数已同步:"
+                    f" concurrency={synced_account.get('concurrency')},"
+                    f" priority={synced_account.get('priority')},"
+                    f" group_ids={synced_account.get('group_ids')}"
+                )
 
                 update_account_status(email, "已绑定sub2api")
                 print("✅ sub2api 绑定完成！")

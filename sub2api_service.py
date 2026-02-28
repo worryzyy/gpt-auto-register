@@ -187,6 +187,50 @@ class Sub2ApiClient:
         print(f"✅ sub2api 账号配置更新成功! ID: {account.get('id', account_id)}")
         return account
 
+    def get_account(self, account_id: int) -> dict:
+        """
+        查询账号详情
+        GET /api/v1/admin/accounts/{id}
+        """
+        if not self.token:
+            raise Exception("未登录 sub2api，请先调用 login()")
+
+        url = f'{self.base_url}/api/v1/admin/accounts/{int(account_id)}'
+        resp = self.session.get(url, headers=self._headers(), timeout=30)
+        resp.raise_for_status()
+
+        data = resp.json()
+        if data.get('code') != 0:
+            raise Exception(f"查询账号详情失败: {data.get('message', 'Unknown error')}")
+
+        return data.get('data', {})
+
+    def update_account_full(self, account_id: int, payload: dict) -> dict:
+        """
+        使用完整 payload 更新账号（优先 POST，失败时回退 PUT）
+        POST /api/v1/admin/accounts/{id}
+        PUT  /api/v1/admin/accounts/{id}
+        """
+        if not self.token:
+            raise Exception("未登录 sub2api，请先调用 login()")
+
+        url = f'{self.base_url}/api/v1/admin/accounts/{int(account_id)}'
+        print(f"📤 正在通过 POST 更新 sub2api 账号... (ID: {account_id})")
+        resp = self.session.post(url, json=payload, headers=self._headers(), timeout=60)
+
+        if resp.status_code in (404, 405):
+            print("⚠️ POST 更新不可用，回退为 PUT 更新...")
+            resp = self.session.put(url, json=payload, headers=self._headers(), timeout=60)
+
+        resp.raise_for_status()
+        data = resp.json()
+        if data.get('code') != 0:
+            raise Exception(f"完整更新账号失败: {data.get('message', 'Unknown error')}")
+
+        account = data.get('data', {})
+        print(f"✅ sub2api 账号完整更新成功! ID: {account.get('id', account_id)}")
+        return account
+
     def refresh_openai_token(self, refresh_token: str) -> dict:
         """
         使用 refresh_token 刷新 OpenAI token（备用方案）
