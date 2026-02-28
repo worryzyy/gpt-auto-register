@@ -106,6 +106,15 @@ class PaymentConfig:
 
 
 @dataclass
+class Sub2ApiConfig:
+    """sub2api 自动绑定配置"""
+    enabled: bool = False
+    base_url: str = ""
+    email: str = ""
+    password: str = ""
+
+
+@dataclass
 class AppConfig:
     """应用程序完整配置"""
     registration: RegistrationConfig = field(default_factory=RegistrationConfig)
@@ -116,6 +125,7 @@ class AppConfig:
     batch: BatchConfig = field(default_factory=BatchConfig)
     files: FilesConfig = field(default_factory=FilesConfig)
     payment: PaymentConfig = field(default_factory=PaymentConfig)
+    sub2api: Sub2ApiConfig = field(default_factory=Sub2ApiConfig)
 
 
 # ==============================================================
@@ -268,6 +278,16 @@ class ConfigLoader:
                     expiry_year=payment.get('credit_card', {}).get('expiry_year', ''),
                     cvc=payment.get('credit_card', {}).get('cvc', '')
                 )
+            )
+
+        # sub2api 自动绑定配置
+        if 'sub2api' in self.raw_config:
+            s2a = self.raw_config['sub2api']
+            self.config.sub2api = Sub2ApiConfig(
+                enabled=s2a.get('enabled', False),
+                base_url=s2a.get('base_url', ''),
+                email=s2a.get('email', ''),
+                password=s2a.get('password', '')
             )
     
     def reload(self) -> None:

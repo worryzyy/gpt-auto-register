@@ -67,3 +67,11 @@ payment:
 # 文件路径配置
 files:
   accounts_file: "registered_accounts.txt"  # 注册成功账号的保存路径
+
+# sub2api 自动绑定配置
+# 注册完成后自动将账号通过 OAuth 绑定到 sub2api 平台
+sub2api:
+  enabled: false                              # 是否启用自动绑定
+  base_url: "http://your-sub2api-host:8889"   # sub2api 后端地址
+  email: "admin@example.com"                  # sub2api 管理员邮箱
+  password: "your-admin-password"             # sub2api 管理员密码

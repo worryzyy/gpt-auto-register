@@ -73,6 +73,13 @@ main.print = hooked_print
 browser.print = hooked_print
 email_service.print = hooked_print
 
+# sub2api_service 在 main.py 中按需导入，提前加载并 hook
+try:
+    import sub2api_service
+    sub2api_service.print = hooked_print
+except ImportError:
+    pass
+
 # ==========================================
 # 🧵 后台工作线程
 # ==========================================

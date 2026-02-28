@@ -22,7 +22,8 @@ import random
 from config import (
     TOTAL_ACCOUNTS,
     BATCH_INTERVAL_MIN,
-    BATCH_INTERVAL_MAX
+    BATCH_INTERVAL_MAX,
+    cfg
 )
 from utils import generate_random_password, save_to_txt, update_account_status
 from email_service import create_temp_email, wait_for_verification_email
@@ -30,7 +31,8 @@ from browser import (
     create_driver,
     fill_signup_form,
     enter_verification_code,
-    fill_profile_info
+    fill_profile_info,
+    perform_openai_oauth
 )
 
 
@@ -108,19 +110,64 @@ def register_one_account(monitor_callback=None):
         
         # 9. 保存账号信息 (注册成功)
         save_to_txt(email, password, "已注册")
-        
+
         # 10. 完成注册
         print("\n" + "=" * 50)
         print("🎉 注册成功！")
         print(f"   邮箱: {email}")
         print(f"   密码: {password}")
         print("=" * 50)
-        
+
         success = True
         print("⏳ 等待页面稳定...")
         time.sleep(5)
         _report("registered")
-        print("✅ 注册完成，已跳过绑卡与取消订阅流程")
+
+        # 11. 自动绑定到 sub2api（如果启用）
+        if cfg.sub2api.enabled:
+            try:
+                print("\n" + "=" * 50)
+                print("🔗 开始绑定到 sub2api...")
+                print("=" * 50)
+
+                if not (cfg.sub2api.base_url and cfg.sub2api.email and cfg.sub2api.password):
+                    raise Exception("sub2api 已启用，但 base_url/email/password 配置不完整")
+
+                from sub2api_service import Sub2ApiClient
+                client = Sub2ApiClient(
+                    cfg.sub2api.base_url,
+                    cfg.sub2api.email,
+                    cfg.sub2api.password
+                )
+                client.login()
+
+                # 获取 OAuth 授权 URL
+                auth_url, session_id = client.generate_openai_auth_url()
+                _report("sub2api_oauth_start")
+
+                # 在浏览器中执行 OAuth 授权
+                code, state = perform_openai_oauth(
+                    driver,
+                    auth_url,
+                    email,
+                    password,
+                    email_jwt_token=jwt_token
+                )
+                _report("sub2api_oauth_done")
+
+                # 调用 sub2api 创建账号
+                client.create_account_from_oauth(session_id, code, state, name=email)
+
+                update_account_status(email, "已绑定sub2api")
+                print("✅ sub2api 绑定完成！")
+
+            except Exception as e:
+                print(f"⚠️ sub2api 绑定失败: {e}")
+                update_account_status(email, "已注册(绑定失败)")
+                # 启用 sub2api 时，绑定失败视为整条流程失败
+                success = False
+        else:
+            print("✅ 注册完成，已跳过绑卡与取消订阅流程")
         
     except InterruptedError:
         print("🛑 任务已被用户强制中断")

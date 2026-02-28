@@ -192,7 +192,7 @@ def parse_raw_email(raw_content: str):
     return result
 
 
-def wait_for_verification_email(jwt_token: str, timeout: int = None):
+def wait_for_verification_email(jwt_token: str, timeout: int = None, exclude_email_ids=None):
     """
     等待并提取 OpenAI 验证码
     会持续轮询邮箱直到收到验证邮件或超时
@@ -200,12 +200,14 @@ def wait_for_verification_email(jwt_token: str, timeout: int = None):
     参数:
         jwt_token: JWT 令牌
         timeout: 超时时间（秒），默认使用配置文件中的值
+        exclude_email_ids: 需要忽略的邮件 ID 集合（用于只匹配新验证码）
     
     返回:
         str: 验证码，未找到返回 None
     """
     if timeout is None:
         timeout = EMAIL_WAIT_TIMEOUT
+    excluded_ids = {str(x) for x in (exclude_email_ids or []) if x}
     
     print(f"⏳ 正在等待验证邮件（最长 {timeout} 秒）...")
     start_time = time.time()
@@ -215,6 +217,10 @@ def wait_for_verification_email(jwt_token: str, timeout: int = None):
         
         if emails and len(emails) > 0:
             for email_item in emails:
+                email_id = email_item.get('id')
+                if email_id and str(email_id) in excluded_ids:
+                    continue
+
                 # 尝试解析 raw 字段（如果存在）
                 raw_content = email_item.get('raw', '')
                 if raw_content:
@@ -245,7 +251,6 @@ def wait_for_verification_email(jwt_token: str, timeout: int = None):
                             return code
                     
                     # 如果还没有，尝试获取邮件详情
-                    email_id = email_item.get('id')
                     if email_id:
                         detail = get_email_detail(jwt_token, email_id)
                         if detail:

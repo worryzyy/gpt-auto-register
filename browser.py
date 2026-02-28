@@ -1612,3 +1612,427 @@ def cancel_subscription(driver):
     except Exception as e:
         print(f"❌ 取消订阅失败: {e}")
         return False
+
+
+def perform_openai_oauth(
+    driver,
+    auth_url: str,
+    email: str,
+    password: str,
+    timeout: int = 120,
+    email_jwt_token: str = None
+) -> tuple:
+    """
+    在浏览器中执行 OpenAI OAuth 授权流程
+
+    流程:
+        1. 访问 sub2api 生成的 OAuth 授权 URL (auth.openai.com)
+        2. 如果需要登录，自动输入邮箱和密码
+        3. 点击授权按钮
+        4. 等待重定向到 callback URL（localhost:1455）
+        5. 从 URL 中提取 code 和 state 参数
+
+    参数:
+        driver: Selenium WebDriver
+        auth_url: sub2api 生成的 OpenAI OAuth 授权 URL
+        email: 新注册账号的邮箱
+        password: 新注册账号的密码
+        timeout: 等待超时时间（秒）
+        email_jwt_token: 临时邮箱 JWT，用于自动拉取验证码（可选）
+
+    返回:
+        tuple: (code, state) OAuth 授权码和 state 参数
+    """
+    print("🔐 开始 OpenAI OAuth 授权流程...")
+    print(f"   授权 URL: {auth_url[:80]}...")
+
+    expected_redirect_uri = None
+    try:
+        from urllib.parse import urlparse, parse_qs
+        auth_params = parse_qs(urlparse(auth_url).query)
+        expected_redirect_uri = auth_params.get('redirect_uri', [None])[0]
+    except Exception:
+        expected_redirect_uri = None
+
+    # 1. 访问 OAuth 授权页面
+    driver.get(auth_url)
+    time.sleep(5)
+
+    wait = WebDriverWait(driver, timeout)
+
+    # 先检查是否已经自动重定向到 callback URL
+    if _wait_for_oauth_redirect(driver, max_wait=5, expected_redirect_uri=expected_redirect_uri):
+        code, state = _extract_oauth_params(driver.current_url)
+        print(f"   ✅ OAuth 自动授权成功! code: {code[:20]}...")
+        return code, state
+
+    # 2. 处理登录（auth.openai.com 需要输入邮箱密码）
+    #    不管 URL 如何，只要页面上有邮箱输入框就进行登录
+    login_ok = _handle_oauth_login(driver, email, password, wait, email_jwt_token=email_jwt_token)
+    if (not login_ok) and (not _wait_for_oauth_redirect(driver, max_wait=3, expected_redirect_uri=expected_redirect_uri)):
+        raise Exception(f"OAuth 登录流程失败，当前 URL: {driver.current_url}")
+
+    # 3. 登录完成后，等待重定向
+    if _wait_for_oauth_redirect(driver, max_wait=15, expected_redirect_uri=expected_redirect_uri):
+        code, state = _extract_oauth_params(driver.current_url)
+        print(f"   ✅ OAuth 授权成功! code: {code[:20]}...")
+        return code, state
+
+    # 4. 如果没有自动重定向，可能还需要点击授权按钮
+    #    此时应该不在登录页面了，再点击 Allow/Authorize
+    _click_authorize_button(driver)
+
+    # 5. 等待重定向到 callback URL
+    print("   等待 OAuth 重定向...")
+    if _wait_for_oauth_redirect(driver, max_wait=timeout, expected_redirect_uri=expected_redirect_uri):
+        code, state = _extract_oauth_params(driver.current_url)
+        print(f"   ✅ OAuth 授权成功! code: {code[:20]}...")
+        return code, state
+
+    raise Exception(f"OAuth 授权超时: 未能重定向到 callback URL，当前 URL: {driver.current_url}")
+
+
+def _handle_oauth_login(driver, email: str, password: str, wait, email_jwt_token: str = None):
+    """
+    处理 auth.openai.com 上的登录流程
+    通过检测页面上是否有邮箱输入框来判断是否需要登录
+
+    参数:
+        driver: Selenium WebDriver
+        email: 邮箱
+        password: 密码
+        wait: WebDriverWait 实例
+        email_jwt_token: 临时邮箱 JWT，用于自动拉取验证码（可选）
+    """
+    def _set_controlled_input_value(input_el, value: str, field_name: str) -> bool:
+        """兼容 React Aria 受控输入框。"""
+        try:
+            driver.execute_script("arguments[0].focus(); arguments[0].click();", input_el)
+            time.sleep(0.2)
+            driver.execute_script("""
+                var el = arguments[0];
+                var val = arguments[1];
+                var nativeSetter = Object.getOwnPropertyDescriptor(
+                    window.HTMLInputElement.prototype, 'value'
+                ).set;
+                nativeSetter.call(el, val);
+                el.dispatchEvent(new Event('input', { bubbles: true }));
+                el.dispatchEvent(new Event('change', { bubbles: true }));
+            """, input_el, value)
+            time.sleep(0.4)
+
+            if (input_el.get_attribute('value') or '') == value:
+                return True
+
+            print(f"   ⚠️ {field_name} JS 注入不完整，尝试 ActionChains...")
+            actions = ActionChains(driver)
+            input_el.click()
+            actions.key_down(Keys.CONTROL).send_keys('a').key_up(Keys.CONTROL)
+            actions.send_keys(Keys.DELETE)
+            actions.pause(0.2)
+            actions.send_keys(value)
+            actions.perform()
+            time.sleep(0.4)
+            return (input_el.get_attribute('value') or '') == value
+        except Exception as e:
+            print(f"   ⚠️ 设置{field_name}失败: {e}")
+            return False
+
+    def _click_submit_button() -> bool:
+        submit_selectors = [
+            'button[type="submit"]',
+            'button[name="action"]',
+            'button[data-testid*="continue"]',
+            'button[data-testid*="login"]',
+            'input[type="submit"]'
+        ]
+        for selector in submit_selectors:
+            try:
+                buttons = driver.find_elements(By.CSS_SELECTOR, selector)
+                for btn in buttons:
+                    if btn.is_displayed() and btn.is_enabled():
+                        driver.execute_script("arguments[0].click();", btn)
+                        return True
+            except:
+                continue
+        return False
+
+    # 不依赖 URL 判断，直接检测页面上是否有邮箱输入框
+    email_selectors = [
+        'input[name="email"]',
+        'input[name="identifier"]',
+        'input[name="username"]',
+        'input[type="email"]',
+        'input[autocomplete="email"]',
+        'input[autocomplete="username"]',
+    ]
+
+    email_input = None
+    for sel in email_selectors:
+        try:
+            els = driver.find_elements(By.CSS_SELECTOR, sel)
+            for el in els:
+                if el.is_displayed():
+                    email_input = el
+                    print(f"   🔑 检测到登录页面，找到邮箱输入框: {sel}")
+                    break
+            if email_input:
+                break
+        except:
+            continue
+
+    if not email_input:
+        # 兜底：找页面上第一个可见的 text/email input
+        try:
+            all_inputs = driver.find_elements(By.CSS_SELECTOR, 'input[type="text"], input[type="email"]')
+            for inp in all_inputs:
+                if inp.is_displayed():
+                    email_input = inp
+                    print(f"   🔑 找到邮箱输入框 (兜底): name={inp.get_attribute('name')}")
+                    break
+        except:
+            pass
+
+    if not email_input:
+        print("   ℹ️ 未检测到邮箱输入框，可能已登录或不在登录页面")
+        return True
+
+    print(f"   🔑 开始输入凭据...")
+    existing_email_ids = set()
+    if email_jwt_token:
+        try:
+            from email_service import fetch_emails
+            existing_emails = fetch_emails(email_jwt_token) or []
+            existing_email_ids = {
+                str(item.get('id')) for item in existing_emails if item.get('id')
+            }
+        except Exception:
+            existing_email_ids = set()
+
+    # 输入邮箱
+    try:
+        if not _set_controlled_input_value(email_input, email, "邮箱"):
+            print("   ⚠️ 输入邮箱失败")
+            return False
+
+        print(f"   ✅ 已输入邮箱: {email}")
+        time.sleep(1)
+
+        # 点击继续
+        if not _click_submit_button():
+            print("   ⚠️ 未找到可点击的继续按钮")
+            return False
+        print("   ✅ 已点击继续")
+        time.sleep(3)
+    except Exception as e:
+        print(f"   ⚠️ 输入邮箱失败: {e}")
+        return False
+
+    # 检查是否需要切换到密码登录模式（OpenAI 可能默认验证码登录）
+    try:
+        switch_candidates = driver.find_elements(By.XPATH,
+            '//*[contains(text(), "密码") or contains(text(), "Password") or contains(text(), "password")]'
+        )
+        for el in switch_candidates:
+            if not el.is_displayed():
+                continue
+            text = el.text
+            if any(k in text for k in [
+                '输入密码', 'Enter password', '使用密码', 'password instead',
+                'Use password', 'use password'
+            ]):
+                print(f"   🔄 切换到密码登录模式: '{text}'")
+                try:
+                    el.click()
+                except:
+                    driver.execute_script("arguments[0].click();", el)
+                time.sleep(2)
+                break
+    except:
+        pass
+
+    short_wait = WebDriverWait(driver, 30)
+
+    # 输入密码
+    password_input = None
+    try:
+        password_input = short_wait.until(EC.visibility_of_element_located((
+            By.CSS_SELECTOR,
+            'input[name="current-password"], input[autocomplete="current-password"], input[name="password"], input[type="password"]'
+        )))
+    except Exception:
+        password_input = None
+
+    if password_input:
+        if not _set_controlled_input_value(password_input, password, "密码"):
+            print("   ⚠️ 输入密码失败")
+            return False
+
+        print("   ✅ 已输入密码")
+        time.sleep(1)
+        if not _click_submit_button():
+            print("   ⚠️ 未找到可点击的登录按钮")
+            return False
+        print("   ✅ 已点击登录")
+        time.sleep(5)
+        print("   ✅ 登录流程完成，等待授权页面...")
+        time.sleep(3)
+        return True
+
+    # 密码框不存在时，处理验证码登录流
+    code_input = None
+    try:
+        code_input = short_wait.until(EC.visibility_of_element_located((
+            By.CSS_SELECTOR,
+            'input[name="code"], input[autocomplete="one-time-code"], input[id$="-code"], input[placeholder*="验证码"], input[aria-label*="验证码"]'
+        )))
+    except Exception:
+        code_input = None
+
+    if not code_input:
+        print("   ⚠️ 未找到密码框或验证码输入框，可能页面结构已变化")
+        return False
+
+    print("   🔢 检测到验证码登录模式，开始获取验证码...")
+    verification_code = None
+    if email_jwt_token:
+        try:
+            from email_service import wait_for_verification_email
+            verification_code = wait_for_verification_email(
+                email_jwt_token,
+                exclude_email_ids=existing_email_ids
+            )
+        except Exception as e:
+            print(f"   ⚠️ 自动获取验证码失败: {e}")
+
+    if not verification_code:
+        print("   ⚠️ 自动获取验证码失败，请手动输入")
+        try:
+            verification_code = input("⌨️ 请输入邮箱收到的 6 位验证码: ").strip()
+        except Exception:
+            verification_code = None
+
+    if not verification_code:
+        print("   ❌ 未获取到有效验证码，无法继续 OAuth 登录")
+        return False
+
+    if not _set_controlled_input_value(code_input, verification_code, "验证码"):
+        print("   ⚠️ 输入验证码失败")
+        return False
+
+    print("   ✅ 已输入验证码")
+    time.sleep(1)
+    if not _click_submit_button():
+        print("   ⚠️ 未找到可点击的验证码提交按钮")
+        return False
+    print("   ✅ 已提交验证码")
+    time.sleep(5)
+
+    print("   ✅ 登录流程完成，等待授权页面...")
+    time.sleep(3)
+    return True
+
+
+def _click_authorize_button(driver):
+    """尝试点击 OAuth 授权按钮"""
+    authorize_selectors = [
+        "//button[contains(text(), 'Allow')]",
+        "//button[contains(text(), 'Authorize')]",
+        "//button[contains(text(), 'Continue')]",
+        "//button[contains(text(), '允许')]",
+        "//button[contains(text(), '授权')]",
+        "//button[contains(text(), '继续')]",
+        "//input[@type='submit' and @value='Allow']",
+        "//input[@type='submit' and @value='Continue']",
+        "//button[@type='submit']",
+    ]
+
+    for selector in authorize_selectors:
+        try:
+            btn = driver.find_element(By.XPATH, selector)
+            if btn.is_displayed() and btn.is_enabled():
+                print(f"   找到授权按钮: {btn.text or btn.get_attribute('value') or 'submit'}")
+                time.sleep(1)
+                btn.click()
+                print("   ✅ 已点击授权按钮")
+                time.sleep(3)
+                return
+        except:
+            continue
+
+    print("   ℹ️ 未找到授权按钮，可能会自动重定向")
+
+
+def _wait_for_oauth_redirect(driver, max_wait: int = 60, expected_redirect_uri: str = None) -> bool:
+    """
+    等待浏览器重定向到 OAuth callback URL
+
+    参数:
+        driver: Selenium WebDriver
+        max_wait: 最大等待时间（秒）
+
+    返回:
+        bool: 是否成功重定向
+    """
+    from urllib.parse import urlparse
+
+    expected_parsed = None
+    if expected_redirect_uri:
+        try:
+            expected_parsed = urlparse(expected_redirect_uri)
+        except Exception:
+            expected_parsed = None
+
+    for _ in range(max_wait):
+        current_url = driver.current_url
+        if 'code=' not in current_url:
+            time.sleep(1)
+            continue
+
+        # 优先按 OAuth URL 中的 redirect_uri 精确匹配
+        if expected_parsed:
+            try:
+                current_parsed = urlparse(current_url)
+                if (
+                    current_parsed.scheme == expected_parsed.scheme
+                    and current_parsed.netloc == expected_parsed.netloc
+                    and current_parsed.path == expected_parsed.path
+                ):
+                    return True
+            except Exception:
+                pass
+
+        # sub2api 的 OpenAI OAuth 使用 localhost:1455 作为回调
+        if 'localhost:1455' in current_url:
+            return True
+        # 也检查其他可能的 callback 模式
+        if 'auth/callback' in current_url:
+            return True
+        time.sleep(1)
+    return False
+
+
+def _extract_oauth_params(url: str) -> tuple:
+    """
+    从 OAuth callback URL 中提取 code 和 state 参数
+
+    参数:
+        url: callback URL，如 http://localhost:1455/auth/callback?code=xxx&state=yyy
+
+    返回:
+        tuple: (code, state)
+    """
+    from urllib.parse import urlparse, parse_qs
+
+    parsed = urlparse(url)
+    params = parse_qs(parsed.query)
+
+    code = params.get('code', [None])[0]
+    state = params.get('state', [None])[0]
+
+    if not code:
+        raise Exception(f"OAuth callback URL 中未找到 code 参数: {url}")
+    if not state:
+        raise Exception(f"OAuth callback URL 中未找到 state 参数: {url}")
+
+    return code, state
