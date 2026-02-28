@@ -20,6 +20,12 @@ from config import (
 )
 from utils import http_session, get_user_agent, extract_verification_code
 
+EMAIL_WORKER_BASE_URL = (EMAIL_WORKER_URL or "").rstrip("/")
+
+
+def _worker_url(path: str) -> str:
+    return f"{EMAIL_WORKER_BASE_URL}{path}"
+
 
 def create_temp_email():
     """
@@ -48,7 +54,7 @@ def create_temp_email():
     try:
         # 调用创建邮箱接口
         response = http_session.post(
-            f"{EMAIL_WORKER_URL}/api/new_address",
+            _worker_url("/api/new_address"),
             headers=headers,
             json={"name": prefix},
             timeout=HTTP_TIMEOUT
@@ -97,10 +103,10 @@ def fetch_emails(jwt_token: str, debug: bool = False):
     
     try:
         if debug:
-            print(f"  📡 请求邮箱接口: {EMAIL_WORKER_URL}/api/mails?limit=20&offset=0")
+            print(f"  📡 请求邮箱接口: {_worker_url('/api/mails?limit=20&offset=0')}")
         # API 需要 limit 和 offset 参数
         response = http_session.get(
-            f"{EMAIL_WORKER_URL}/api/mails?limit=20&offset=0",
+            _worker_url("/api/mails?limit=20&offset=0"),
             headers=headers,
             timeout=HTTP_TIMEOUT
         )
@@ -147,7 +153,7 @@ def get_email_detail(jwt_token: str, email_id: str):
     
     try:
         response = http_session.get(
-            f"{EMAIL_WORKER_URL}/api/mails/{email_id}",
+            _worker_url(f"/api/mails/{email_id}"),
             headers=headers,
             timeout=HTTP_TIMEOUT
         )

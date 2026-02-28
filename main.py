@@ -56,7 +56,6 @@ def register_one_account(monitor_callback=None):
 
     try:
         # 1. 创建临时邮箱
-        print("📧 正在创建临时邮箱...")
         email, jwt_token = create_temp_email()
         if not email:
             print("❌ 创建邮箱失败，终止注册")
