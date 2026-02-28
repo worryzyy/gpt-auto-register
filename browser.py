@@ -8,6 +8,7 @@ import os
 import re
 import sys
 import subprocess
+import threading
 import undetected_chromedriver as uc
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
@@ -24,6 +25,10 @@ from config import (
     CHROME_PATH
 )
 from utils import generate_user_info, generate_billing_info
+
+
+_DRIVER_INIT_LOCK = threading.Lock()
+_DRIVER_INIT_MAX_RETRIES = 5
 
 
 class SafeChrome(uc.Chrome):
@@ -115,32 +120,55 @@ def create_driver(headless=False):
         # 仍然可以加一些伪装，虽然不是必需的，因为已经是真浏览器了
         options.add_argument("--lang=zh-CN,zh;q=0.9,en;q=0.8")
     
-    # 使用自定义的 SafeChrome (注意: 传入 real_headless=False)
-    # 如果配置了 Chrome 路径，则使用指定路径
-    if CHROME_PATH:
-        print(f"  📂 使用指定的 Chrome 路径: {CHROME_PATH}")
-        version_main = detect_chrome_major_version(CHROME_PATH)
-        if version_main:
-            print(f"  🔢 检测到 Chrome 主版本: {version_main}")
-        else:
-            print("  ⚠️ 无法检测 Chrome 版本，将由 undetected-chromedriver 自动匹配")
+    def _build_driver():
+        # 使用自定义的 SafeChrome (注意: 传入 real_headless=False)
+        # 如果配置了 Chrome 路径，则使用指定路径
+        if CHROME_PATH:
+            print(f"  📂 使用指定的 Chrome 路径: {CHROME_PATH}")
+            version_main = detect_chrome_major_version(CHROME_PATH)
+            if version_main:
+                print(f"  🔢 检测到 Chrome 主版本: {version_main}")
+            else:
+                print("  ⚠️ 无法检测 Chrome 版本，将由 undetected-chromedriver 自动匹配")
 
-        chrome_kwargs = {
-            "options": options,
-            "use_subprocess": True,
-            "headless": real_headless,
-            "browser_executable_path": CHROME_PATH,
-        }
-        if version_main:
-            chrome_kwargs["version_main"] = version_main
+            chrome_kwargs = {
+                "options": options,
+                "use_subprocess": True,
+                "headless": real_headless,
+                "browser_executable_path": CHROME_PATH,
+                "user_multi_procs": True,
+            }
+            if version_main:
+                chrome_kwargs["version_main"] = version_main
 
-        driver = SafeChrome(**chrome_kwargs)
-    else:
-        driver = SafeChrome(
+            return SafeChrome(**chrome_kwargs)
+
+        return SafeChrome(
             options=options,
             use_subprocess=True,
-            headless=real_headless
+            headless=real_headless,
+            user_multi_procs=True,
         )
+
+    driver = None
+    for attempt in range(1, _DRIVER_INIT_MAX_RETRIES + 1):
+        try:
+            # 多线程并发时，串行化 driver 初始化，避免 uc 同时改写二进制导致 ETXTBSY
+            with _DRIVER_INIT_LOCK:
+                driver = _build_driver()
+            break
+        except Exception as exc:
+            err_text = str(exc).lower()
+            is_text_busy = (getattr(exc, "errno", None) == 26) or ("text file busy" in err_text)
+            if (not is_text_busy) or attempt >= _DRIVER_INIT_MAX_RETRIES:
+                raise
+
+            wait_seconds = min(2 * attempt, 10)
+            print(
+                f"⚠️ chromedriver 文件忙(Text file busy)，"
+                f"{wait_seconds}s 后重试 ({attempt}/{_DRIVER_INIT_MAX_RETRIES})..."
+            )
+            time.sleep(wait_seconds)
 
     # === 深度伪装 (针对 Headless 模式) ===
     if headless:
