@@ -130,6 +130,8 @@ function updateUI(data) {
 // 启动任务
 async function startTask() {
     const count = parseInt(document.getElementById('targetCount').value) || 1;
+    let workerCount = parseInt(document.getElementById('workerCount').value) || 1;
+    workerCount = Math.max(1, Math.min(workerCount, count));
 
     // 清空旧日志
     clearLogs();
@@ -138,7 +140,7 @@ async function startTask() {
         const res = await fetch('/api/start', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ count: count })
+            body: JSON.stringify({ count: count, worker_count: workerCount })
         });
 
         if (!res.ok) {

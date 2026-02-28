@@ -1,0 +1,19 @@
+[Unit]
+Description=GPT Auto Register Web Service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__APP_USER__
+WorkingDirectory=__APP_DIR__
+Environment=PYTHONUNBUFFERED=1
+Environment=PATH=%h/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=__APP_DIR__/deploy/ubuntu/start_server.sh
+Restart=always
+RestartSec=5
+TimeoutStartSec=120
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

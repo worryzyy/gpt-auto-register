@@ -51,6 +51,7 @@ retry:
 
 # 批量注册间隔
 batch:
+  worker_count: 1 # 并发注册数（建议 4核机器先从 2-3 开始）
   interval_min: 5  # 最小间隔(秒)
   interval_max: 15 # 最大间隔(秒)
 

@@ -79,6 +79,7 @@ class RetryConfig:
 @dataclass
 class BatchConfig:
     """批量注册配置"""
+    worker_count: int = 1
     interval_min: int = 5
     interval_max: int = 15
 
@@ -259,6 +260,7 @@ class ConfigLoader:
         if 'batch' in self.raw_config:
             batch = self.raw_config['batch']
             self.config.batch = BatchConfig(
+                worker_count=batch.get('worker_count', 1),
                 interval_min=batch.get('interval_min', 5),
                 interval_max=batch.get('interval_max', 15)
             )
@@ -373,6 +375,7 @@ ERROR_PAGE_MAX_RETRIES = cfg.retry.error_page_max_retries
 BUTTON_CLICK_MAX_RETRIES = cfg.retry.button_click_max_retries
 
 # 批量配置
+BATCH_WORKER_COUNT = cfg.batch.worker_count
 BATCH_INTERVAL_MIN = cfg.batch.interval_min
 BATCH_INTERVAL_MAX = cfg.batch.interval_max
 
@@ -417,6 +420,7 @@ def print_config_summary() -> None:
     print(f"  邮箱域名: {cfg.email.domain}")
     print(f"  Worker URL: {cfg.email.worker_url[:30]}...")
     print(f"  账号保存文件: {cfg.files.accounts_file}")
+    print(f"  批量并发数: {cfg.batch.worker_count}")
     print(f"  批量间隔: {cfg.batch.interval_min}-{cfg.batch.interval_max}秒")
     print("=" * 50 + "\n")
 

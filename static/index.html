@@ -36,6 +36,10 @@
                 <label class="ctrl-label">注册数量</label>
                 <input type="number" id="targetCount" class="ctrl-input" value="1" min="1" max="50">
             </div>
+            <div class="ctrl-row">
+                <label class="ctrl-label">并发数量</label>
+                <input type="number" id="workerCount" class="ctrl-input" value="1" min="1" max="10">
+            </div>
 
             <button id="btnStart" class="btn btn-primary" onclick="startTask()">
                 <span>🚀</span> 启动任务
