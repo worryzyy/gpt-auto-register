@@ -346,7 +346,34 @@ def get_accounts():
 
 
 if __name__ == "__main__":
+    import argparse
     from waitress import serve
 
-    print("🌐 Web Server started at http://localhost:5000")
-    serve(app, host="0.0.0.0", port=5000, threads=6)
+    parser = argparse.ArgumentParser(description="ChatGPT 自动注册 Web 服务")
+    parser.add_argument(
+        "--host",
+        default="0.0.0.0",
+        help="监听地址（默认: 0.0.0.0）",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=5000,
+        help="监听端口（默认: 5000）",
+    )
+    parser.add_argument(
+        "--threads",
+        type=int,
+        default=6,
+        help="Waitress 线程数（默认: 6）",
+    )
+    args = parser.parse_args()
+
+    if args.port < 1 or args.port > 65535:
+        raise SystemExit("port 必须在 1-65535 之间")
+    if args.threads < 1:
+        raise SystemExit("threads 必须 >= 1")
+
+    display_host = "localhost" if args.host in ("0.0.0.0", "::") else args.host
+    print(f"🌐 Web Server started at http://{display_host}:{args.port}")
+    serve(app, host=args.host, port=args.port, threads=args.threads)

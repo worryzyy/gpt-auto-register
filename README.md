@@ -87,23 +87,25 @@ cp config.example.yaml config.yaml
 启动带有可视化界面的 Web 服务：
 
 ```bash
-uv run server.py
+bash start_web.sh
+# 指定端口
+bash start_web.sh --port 5001
+# 指定监听地址 + 线程数
+bash start_web.sh --host 127.0.0.1 --port 5001 --threads 8
 ```
 
-然后在浏览器访问：[http://localhost:5000](http://localhost:5000)
+默认在浏览器访问：[http://localhost:5000](http://localhost:5000)（如果改了 `--port`，请使用对应端口）。
 
 **方式二：命令行模式**
 
 仅运行后台脚本：
 
 ```bash
-uv run main.py
+bash start_cli.sh
 # 指定注册数量与并发
-uv run main.py --count 10 --worker-count 3
+bash start_cli.sh --count 10 --worker-count 3
 # 可选：覆盖批次间隔
-uv run main.py --count 10 --worker-count 3 --interval-min 5 --interval-max 12
-# Windows 编码异常时可强制去掉 emoji 日志
-$env:NO_EMOJI_LOG="1"; uv run main.py --count 10 --worker-count 3
+bash start_cli.sh --count 10 --worker-count 3 --interval-min 5 --interval-max 12
 ```
 
 
@@ -277,5 +279,3 @@ xxx@domain.com | password123 | 已取消订阅 | 2026-01-06 09:45:00
 2. **合规使用**：请严格遵守 OpenAI 的[使用条款](https://openai.com/policies/terms-of-use)。请勿将本工具用于任何商业用途、大规模批量注册或其他违反服务条款的行为。
 3. **风险自负**：使用者需自行承担使用本工具产生的任何后果（包括但不限于账号被封禁、IP 被拉黑等）。作者不对任何因使用本工具而导致的损失负责。
 4. **无担保**：本项目基于开源精神分享，不提供任何形式的保证或维护承诺。代码可能会因目标网站更新而失效。
-
-
