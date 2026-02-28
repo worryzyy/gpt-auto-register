@@ -215,12 +215,8 @@ class Sub2ApiClient:
             raise Exception("未登录 sub2api，请先调用 login()")
 
         url = f'{self.base_url}/api/v1/admin/accounts/{int(account_id)}'
-        print(f"📤 正在通过 POST 更新 sub2api 账号... (ID: {account_id})")
-        resp = self.session.post(url, json=payload, headers=self._headers(), timeout=60)
-
-        if resp.status_code in (404, 405):
-            print("⚠️ POST 更新不可用，回退为 PUT 更新...")
-            resp = self.session.put(url, json=payload, headers=self._headers(), timeout=60)
+        print(f"📤 正在通过 PUT 更新 sub2api 账号... (ID: {account_id})")
+        resp = self.session.put(url, json=payload, headers=self._headers(), timeout=60)
 
         resp.raise_for_status()
         data = resp.json()

@@ -5,6 +5,7 @@ import queue
 import builtins
 import os
 import random
+import re
 from datetime import datetime
 from flask import Flask, jsonify, request, send_from_directory
 
@@ -59,6 +60,25 @@ class AppState:
             return self.last_frame
 
 state = AppState()
+
+
+def parse_sub2api_status(status_text):
+    """从状态文本中提取 sub2api 账号 ID（如: 已绑定sub2api(id=21)）"""
+    if not status_text:
+        return status_text, None
+
+    # 兼容英文/中文括号与 id=: 两种写法
+    match = re.search(
+        r'^(?P<base>.*?)\s*[（(]\s*id\s*[:=]\s*(?P<id>\d+)\s*[)）]\s*$',
+        status_text,
+        re.IGNORECASE
+    )
+    if not match:
+        return status_text, None
+
+    base_status = match.group('base').strip() or status_text
+    sub2api_id = int(match.group('id'))
+    return base_status, sub2api_id
 
 # Hack: 劫持 print 函数以捕获日志
 original_print = builtins.print
@@ -247,10 +267,12 @@ def get_accounts():
                             continue
 
                     if email:
+                        parsed_status, sub2api_id = parse_sub2api_status(status)
                         accounts.append({
                             "email": email,
                             "password": password,
-                            "status": status,
+                            "status": parsed_status,
+                            "sub2api_id": sub2api_id,
                             "time": time_text
                         })
         except Exception as e:

@@ -413,8 +413,8 @@ def _set_controlled_input_value(driver, input_el, value: str, field_name: str) -
         try:
             _clear_input_with_shortcuts(input_el)
             type_slowly(input_el, value, delay=0.03)
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"  ⚠️ {field_name} type_slowly 失败: {e}")
         time.sleep(0.4)
         if _input_value_equals(driver, input_el, value):
             time.sleep(0.2)
@@ -426,6 +426,9 @@ def _set_controlled_input_value(driver, input_el, value: str, field_name: str) -
             var nativeSetter = Object.getOwnPropertyDescriptor(
                 window.HTMLInputElement.prototype, 'value'
             ).set;
+            // 清除 React _valueTracker，否则 React 检测不到值变化会忽略事件
+            var tracker = el._valueTracker;
+            if (tracker) { tracker.setValue(''); }
             nativeSetter.call(el, val);
             el.dispatchEvent(new Event('input', { bubbles: true }));
             el.dispatchEvent(new Event('change', { bubbles: true }));
@@ -604,6 +607,15 @@ def fill_signup_form(driver, email: str, password: str):
             return False
         print("✅ 已输入密码")
         time.sleep(1)
+
+        # 再次验证密码是否真正写入（防止 React 重渲染清空）
+        password_input2, _ = _find_first_visible_input(driver, OPENAI_SIGNUP_PASSWORD_INPUT_SELECTORS)
+        if password_input2 and not _input_value_equals(driver, password_input2, password):
+            print("⚠️ 密码被清空，重新输入...")
+            if not _set_controlled_input_value(driver, password_input2, password, "密码"):
+                print("❌ 重新输入密码失败")
+                return False
+            print("✅ 已重新输入密码")
 
         # 5. 点击继续
         print("🔘 点击继续按钮...")

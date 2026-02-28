@@ -218,6 +218,7 @@ def register_one_account(monitor_callback=None):
                     'extra': latest_account.get('extra', {}),
                 }
                 synced_account = client.update_account_full(account_id, full_payload)
+                synced_account_id = synced_account.get('id', account_id)
                 print(
                     "✅ sub2api 参数已同步:"
                     f" concurrency={synced_account.get('concurrency')},"
@@ -225,7 +226,7 @@ def register_one_account(monitor_callback=None):
                     f" group_ids={synced_account.get('group_ids')}"
                 )
 
-                update_account_status(email, "已绑定sub2api")
+                update_account_status(email, f"已绑定sub2api(id={synced_account_id})")
                 print("✅ sub2api 绑定完成！")
 
             except Exception as e:
