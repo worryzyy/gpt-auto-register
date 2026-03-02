@@ -601,6 +601,50 @@ def fill_signup_form(driver, email: str, password: str):
             timeout=SHORT_WAIT_TIME
         )
         if not email_input:
+            # 兜底 1：常见 text/email 输入
+            email_input, matched_selector = _find_first_visible_input(
+                driver,
+                ['input[type="text"]', 'input[type="email"]']
+            )
+            if email_input:
+                matched_selector = matched_selector or "fallback:text_or_email"
+
+        if not email_input:
+            # 兜底 2：全局扫描可交互输入框（优先“邮箱语义”）
+            try:
+                all_inputs = driver.find_elements(By.CSS_SELECTOR, "input")
+                semantic_candidate = None
+                generic_candidate = None
+                for el in all_inputs:
+                    input_type = (el.get_attribute("type") or "").lower()
+                    if input_type in ("hidden", "submit", "button", "checkbox", "radio", "file"):
+                        continue
+                    if not _is_interactable_input(driver, el):
+                        continue
+
+                    name_attr = (el.get_attribute("name") or "").lower()
+                    id_attr = (el.get_attribute("id") or "").lower()
+                    placeholder = (el.get_attribute("placeholder") or "").lower()
+                    aria_label = (el.get_attribute("aria-label") or "").lower()
+                    autocomplete = (el.get_attribute("autocomplete") or "").lower()
+                    marker = f"{name_attr} {id_attr} {placeholder} {aria_label} {autocomplete}"
+
+                    if any(k in marker for k in ("email", "mail", "邮箱", "电子邮件")):
+                        semantic_candidate = el
+                        break
+                    if generic_candidate is None:
+                        generic_candidate = el
+
+                if semantic_candidate:
+                    email_input = semantic_candidate
+                    matched_selector = "fallback:global_email_like_input"
+                elif generic_candidate:
+                    email_input = generic_candidate
+                    matched_selector = "fallback:global_first_interactable_input"
+            except Exception:
+                pass
+
+        if not email_input:
             raise Exception("未找到邮箱输入框")
 
         print(f"📝 正在输入邮箱 ({matched_selector})...")
@@ -877,83 +921,131 @@ def fill_profile_info(driver):
     返回:
         bool: 是否成功
     """
-    wait = WebDriverWait(driver, MAX_WAIT_TIME)
-    
     # 生成随机用户信息
     user_info = generate_user_info()
     user_name = user_info['name']
-    birthday_year = user_info['year']
-    birthday_month = user_info['month']
-    birthday_day = user_info['day']
-    
+    birthday_year = str(user_info['year'])
+    birthday_month = str(user_info['month']).zfill(2)
+    birthday_day = str(user_info['day']).zfill(2)
+
+    name_selectors = [
+        'input[name="name"]',
+        'input[autocomplete="name"]',
+        'input[name*="name"]',
+        'input[id*="name"]',
+        'input[aria-label*="Name"]',
+        'input[aria-label*="姓名"]',
+        'input[placeholder*="Name"]',
+        'input[placeholder*="姓名"]',
+    ]
+    year_selectors = [
+        '[data-type="year"]',
+        'input[autocomplete="bday-year"]',
+        'input[name*="year"]',
+        'input[id*="year"]',
+        'input[placeholder*="YYYY"]',
+        'input[aria-label*="Year"]',
+        'input[aria-label*="年份"]',
+    ]
+    month_selectors = [
+        '[data-type="month"]',
+        'input[autocomplete="bday-month"]',
+        'input[name*="month"]',
+        'input[id*="month"]',
+        'input[placeholder*="MM"]',
+        'input[aria-label*="Month"]',
+        'input[aria-label*="月份"]',
+    ]
+    day_selectors = [
+        '[data-type="day"]',
+        'input[autocomplete="bday-day"]',
+        'input[name*="day"]',
+        'input[id*="day"]',
+        'input[placeholder*="DD"]',
+        'input[aria-label*="Day"]',
+        'input[aria-label*="日期"]',
+    ]
+    full_birthday_selectors = [
+        'input[type="date"]',
+        'input[name*="birth"]',
+        'input[id*="birth"]',
+        'input[autocomplete*="bday"]',
+        'input[aria-label*="Birth"]',
+        'input[aria-label*="生日"]',
+        'input[placeholder*="Birth"]',
+        'input[placeholder*="生日"]',
+    ]
+
     try:
-        # 1. 输入姓名
         print("👤 等待姓名输入框...")
-        name_input = WebDriverWait(driver, 60).until(
-            EC.visibility_of_element_located((
-                By.CSS_SELECTOR, 
-                'input[name="name"], input[autocomplete="name"]'
-            ))
-        )
-        name_input.clear()
-        time.sleep(0.5)
-        type_slowly(name_input, user_name)
+        name_input, name_selector = _wait_for_visible_input(driver, name_selectors, timeout=40)
+        if not name_input:
+            current_url = (driver.current_url or "").lower()
+            if ("chatgpt.com" in current_url) and ("/auth" not in current_url):
+                print("ℹ️ 未检测到资料输入框，当前已在已登录页面，跳过资料填写")
+                return True
+            raise Exception("未找到姓名输入框")
+
+        print(f"📝 正在输入姓名 ({name_selector})...")
+        if not _set_controlled_input_value(driver, name_input, user_name, "姓名"):
+            raise Exception("姓名输入失败")
         print(f"✅ 已输入姓名: {user_name}")
-        time.sleep(1)
-        
-        # 2. 输入生日
+        time.sleep(0.8)
+
         print("🎂 正在输入生日...")
+        year_input, year_selector = _wait_for_visible_input(driver, year_selectors, timeout=18)
+        if year_input:
+            month_input, month_selector = _wait_for_visible_input(driver, month_selectors, timeout=8)
+            day_input, day_selector = _wait_for_visible_input(driver, day_selectors, timeout=8)
+            if (not month_input) or (not day_input):
+                raise Exception("生日字段不完整：未找到月份或日期输入框")
+
+            print(f"📝 输入年份 ({year_selector})...")
+            if not _set_controlled_input_value(driver, year_input, birthday_year, "生日年份"):
+                raise Exception("生日年份输入失败")
+
+            print(f"📝 输入月份 ({month_selector})...")
+            if not _set_controlled_input_value(driver, month_input, birthday_month, "生日月份"):
+                raise Exception("生日月份输入失败")
+
+            print(f"📝 输入日期 ({day_selector})...")
+            if not _set_controlled_input_value(driver, day_input, birthday_day, "生日日"):
+                raise Exception("生日日期输入失败")
+
+            print(f"✅ 已输入生日: {birthday_year}/{birthday_month}/{birthday_day}")
+        else:
+            birthday_input, birthday_selector = _wait_for_visible_input(
+                driver, full_birthday_selectors, timeout=12
+            )
+            if not birthday_input:
+                raise Exception("未找到生日输入框")
+
+            birthday_value = f"{birthday_year}-{birthday_month}-{birthday_day}"
+            print(f"📝 输入生日 ({birthday_selector})...")
+            if not _set_controlled_input_value(driver, birthday_input, birthday_value, "生日"):
+                raise Exception("生日输入失败")
+            print(f"✅ 已输入生日: {birthday_value}")
+
         time.sleep(1)
-        
-        # 年份
-        year_input = WebDriverWait(driver, 30).until(
-            EC.presence_of_element_located((By.CSS_SELECTOR, '[data-type="year"]'))
-        )
-        driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", year_input)
-        time.sleep(0.5)
-        
-        actions = ActionChains(driver)
-        actions.click(year_input).perform()
-        time.sleep(0.3)
-        year_input.send_keys(Keys.CONTROL + "a")
-        time.sleep(0.1)
-        type_slowly(year_input, birthday_year, delay=0.1)
-        time.sleep(0.5)
-        
-        # 月份
-        month_input = driver.find_element(By.CSS_SELECTOR, '[data-type="month"]')
-        actions = ActionChains(driver)
-        actions.click(month_input).perform()
-        time.sleep(0.3)
-        month_input.send_keys(Keys.CONTROL + "a")
-        time.sleep(0.1)
-        type_slowly(month_input, birthday_month, delay=0.1)
-        time.sleep(0.5)
-        
-        # 日期
-        day_input = driver.find_element(By.CSS_SELECTOR, '[data-type="day"]')
-        actions = ActionChains(driver)
-        actions.click(day_input).perform()
-        time.sleep(0.3)
-        day_input.send_keys(Keys.CONTROL + "a")
-        time.sleep(0.1)
-        type_slowly(day_input, birthday_day, delay=0.1)
-        
-        print(f"✅ 已输入生日: {birthday_year}/{birthday_month}/{birthday_day}")
-        time.sleep(1)
-        
-        # 3. 点击最后的继续按钮
         print("🔘 点击最终提交按钮...")
-        continue_btn = wait.until(
-            EC.element_to_be_clickable((By.CSS_SELECTOR, 'button[type="submit"]'))
-        )
-        continue_btn.click()
+        if not _click_submit_button(driver):
+            raise Exception("未找到可点击的提交按钮")
         print("✅ 已提交注册信息")
-        
+
+        time.sleep(2)
+        while check_and_handle_error(driver):
+            time.sleep(1)
         return True
-        
+
     except Exception as e:
         print(f"❌ 填写资料失败: {e}")
+        try:
+            driver.save_screenshot("debug_fill_profile_error.png")
+            print("📸 已保存截图: debug_fill_profile_error.png")
+            print(f"DEBUG: 当前页面标题: {driver.title}")
+            print(f"DEBUG: 当前页面URL: {driver.current_url}")
+        except Exception:
+            pass
         return False
 
 
@@ -2010,10 +2102,28 @@ def _handle_oauth_login(driver, email: str, password: str, wait, email_jwt_token
         time.sleep(0.5)
 
     if not email_input:
-        # 兜底：找页面上第一个可见的 text/email input
+        # 兜底 1：找页面上第一个可见的 text/email input
         email_input, _ = _find_first_visible_input(driver, ['input[type="text"], input[type="email"]'])
         if email_input:
             print(f"   🔑 找到邮箱输入框 (兜底): name={email_input.get_attribute('name')}")
+
+    if not email_input:
+        # 兜底 2：全局扫描可交互输入框（按你的要求）
+        try:
+            all_inputs = driver.find_elements(By.CSS_SELECTOR, "input")
+            for el in all_inputs:
+                input_type = (el.get_attribute("type") or "").lower()
+                if input_type in ("hidden", "submit", "button", "checkbox", "radio", "file"):
+                    continue
+                if _is_interactable_input(driver, el):
+                    email_input = el
+                    print(
+                        "   🔎 邮箱选择器未命中，使用全局输入框兜底: "
+                        f"name={el.get_attribute('name')}, type={input_type or 'text'}"
+                    )
+                    break
+        except Exception:
+            pass
 
     if not email_input:
         print("   ⚠️ 未检测到邮箱输入框，且未识别到授权页")
@@ -2087,7 +2197,7 @@ def _handle_oauth_login(driver, email: str, password: str, wait, email_jwt_token
 
         return True
 
-    # 输入邮箱
+    # 邮箱步骤（必走）
     try:
         if not _set_controlled_input_value(driver, email_input, email, "邮箱"):
             print("   ⚠️ 输入邮箱失败")

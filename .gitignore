@@ -57,3 +57,5 @@ bank/
 
 # UV
 .uv/
+
+playwright_regist
